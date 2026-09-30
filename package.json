@@ -1,0 +1,52 @@
+{
+  "name": "axi-enforce",
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.33.0",
+  "description": "Make coding agents (Claude Code, Codex, OpenCode, Gemini CLI, Qwen Code, Cursor) use AXI wrappers instead of the plain CLIs they wrap, and turn every wrapper gap into a GitHub issue",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/simkimsia/axi-enforce.git"
+  },
+  "keywords": [
+    "axi",
+    "agent",
+    "hooks",
+    "claude-code",
+    "codex",
+    "opencode",
+    "gemini-cli",
+    "qwen-code",
+    "cursor"
+  ],
+  "bin": {
+    "axi-enforce": "./dist/bin/axi-enforce.js"
+  },
+  "files": [
+    "dist",
+    "plugins",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prepublishOnly": "npm run build"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "prettier": "^3.8.1",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
