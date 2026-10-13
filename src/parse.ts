@@ -51,6 +51,9 @@ export function programName(word: string): string {
 
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
+/** Shell reserved words that can sit in front of a command: `do gh pr list`, `then railway up`. */
+const RESERVED = new Set(["do", "then", "else", "elif", "if", "while", "until", "!", "{"]);
+
 /** Drop heredoc bodies: everything after `<<EOF` up to the terminator line. */
 export function stripHeredocs(cmd: string): string {
   const lines = cmd.split("\n");
@@ -70,28 +73,45 @@ export function stripHeredocs(cmd: string): string {
   return out.join("\n");
 }
 
+/** One simple command. `pipe`: its stdout feeds the next segment in the same context (`|`, `|&`). */
+export interface Segment {
+  text: string;
+  pipe: boolean;
+  /** id of the executable context (root, a `$(...)`, a backtick, a `( )`) it was found in */
+  ctx: number;
+}
+
 /** Split into simple-command segments, following the contexts where code executes. */
 export function segments(cmd: string): string[] {
+  return scan(cmd).map((s) => s.text);
+}
+
+/** Like `segments`, with pipe links and context ids, so pipelines can be rebuilt. */
+export function scan(cmd: string): Segment[] {
   const src = stripHeredocs(cmd);
-  const segs: string[] = [];
+  const segs: Segment[] = [];
   // context stack: "root" | "sub" ($( or ( ) | "bt" (backtick) | "dq" | "sq"
   const stack: string[] = ["root"];
   // one text buffer per executable context; quoted text is appended to the enclosing buffer
   const bufs: string[] = [""];
+  const ids: number[] = [0];
+  let nextId = 1;
   const top = () => stack[stack.length - 1];
-  const flush = () => {
+  const flush = (pipe = false) => {
     const s = bufs[bufs.length - 1].trim();
-    if (s) segs.push(s);
+    if (s) segs.push({ text: s, pipe, ctx: ids[ids.length - 1] });
     bufs[bufs.length - 1] = "";
   };
   const push = (ctx: string) => {
     stack.push(ctx);
     bufs.push("");
+    ids.push(nextId++);
   };
   const pop = () => {
     flush();
     stack.pop();
     bufs.pop();
+    ids.pop();
   };
   const add = (c: string) => (bufs[bufs.length - 1] += c);
 
@@ -147,7 +167,22 @@ export function segments(cmd: string): string[] {
       push("sub");
       continue;
     }
-    if (c === ";" || c === "&" || c === "|" || c === "\n") {
+    // `2>&1`, `>&2`, `&>file`: part of a redirection, not a separator
+    if (c === "&" && (/[<>]$/.test(bufs[bufs.length - 1]) || src[i + 1] === ">")) {
+      add(c);
+      continue;
+    }
+    if (c === "|") {
+      if (src[i + 1] === "|") {
+        flush(); // `||`: a new command, not a pipe
+        i++;
+      } else {
+        flush(true);
+        if (src[i + 1] === "&") i++; // `|&` pipes stderr too
+      }
+      continue;
+    }
+    if (c === ";" || c === "&" || c === "\n") {
       flush();
       continue;
     }
@@ -156,6 +191,7 @@ export function segments(cmd: string): string[] {
   while (bufs.length) {
     flush();
     bufs.pop();
+    ids.pop();
   }
   return segs;
 }
@@ -201,7 +237,7 @@ export function words(segment: string): string[] {
 export function resolve(ws: string[]): Invocation | null {
   let i = 0;
   for (;;) {
-    while (i < ws.length && ASSIGNMENT.test(ws[i])) i++;
+    while (i < ws.length && (ASSIGNMENT.test(ws[i]) || RESERVED.has(ws[i]))) i++;
     if (i >= ws.length) return null;
     const w = ws[i];
     const name = programName(w);
@@ -250,6 +286,34 @@ export function invocations(cmd: string, depth = 0): Invocation[] {
     out.push(inv);
     const script = depth < 4 ? shellScript(inv) : null;
     if (script) out.push(...invocations(script, depth + 1));
+  }
+  return out;
+}
+
+/**
+ * The pipelines in a command, as lists of invocations joined by `|`, in order.
+ * `a | b; c` -> [[a, b], [c]]. Shell -c scripts contribute their own pipelines.
+ */
+export function pipelines(cmd: string, depth = 0): Invocation[][] {
+  const out: Invocation[][] = [];
+  // open pipeline per context: segments of one context arrive in order, inner contexts interleave
+  const open = new Map<number, Invocation[]>();
+  for (const seg of scan(cmd)) {
+    const inv = resolve(words(seg.text));
+    if (!inv) {
+      open.delete(seg.ctx);
+      continue;
+    }
+    let line = open.get(seg.ctx);
+    if (!line) {
+      line = [];
+      out.push(line);
+    }
+    line.push(inv);
+    if (seg.pipe) open.set(seg.ctx, line);
+    else open.delete(seg.ctx);
+    const script = depth < 4 ? shellScript(inv) : null;
+    if (script) out.push(...pipelines(script, depth + 1));
   }
   return out;
 }

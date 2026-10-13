@@ -50,6 +50,12 @@ describe.each([
     expect(denied(r.out)).toBe(true);
     expect(r.out).toContain("gh-axi issue create -R simkimsia/railway-axi");
   });
+  it("denies truncated axi output", () => {
+    const r = run(agent, shape("gh-axi repo view 2>&1 | tail -2"));
+    expect(r.code).toBe(0);
+    expect(denied(r.out)).toBe(true);
+    expect(r.out).toContain("AXI_TRUNCATE=1");
+  });
   it("allows the axi", () => {
     const r = run(agent, shape("railway-axi status"));
     expect(r.code).toBe(0);

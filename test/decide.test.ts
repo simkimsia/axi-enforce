@@ -5,6 +5,7 @@ import type { Policy } from "../src/policy.js";
 const policy: Policy = {
   owners: ["me"],
   log: "/dev/null",
+  truncation: true,
   rules: [
     { tool: "gh", axi: "gh-axi", repo: "someone/gh-axi" },
     { tool: "railway", axi: "railway-axi", repo: "me/railway-axi" },
@@ -58,6 +59,40 @@ describe("decide", () => {
     it("tells the agent to ask before filing upstream", () => {
       const { d } = deps();
       expect(decide("gh pr list", policy, d).reason).toMatch(/ask before filing/);
+    });
+  });
+
+  describe("truncated axi output", () => {
+    it.each([
+      "gh-axi pr list | tail -2",
+      "gh-axi repo view 2>&1 | head -8",
+      "for r in a b; do gh-axi label create -R o/$r --name x 2>&1 | tail -2; done",
+      "railway-axi status | grep env | cut -c1-40",
+      "foo-axi list | head",
+    ])("denies %s", (cmd) => {
+      const { d } = deps();
+      const r = decide(cmd, policy, d);
+      expect(r.decision).toBe("deny");
+      expect(r.reason).toMatch(/axi output is already compact/);
+      expect(r.reason).toContain("AXI_TRUNCATE=1");
+    });
+    it.each([
+      "gh-axi pr view 3 | grep state",
+      "gh-axi pr list > out.txt; tail out.txt",
+      "git log | head -5",
+      "gh-axi pr list || tail x",
+    ])("allows %s", (cmd) => {
+      const { d } = deps();
+      expect(decide(cmd, policy, d).decision).toBe("allow");
+    });
+    it("AXI_TRUNCATE=1 lets it through and logs it", () => {
+      const { d, logged } = deps();
+      expect(decide("AXI_TRUNCATE=1 gh-axi run view 9 --log | tail -50", policy, d).decision).toBe("allow");
+      expect(logged[0]).toContain("truncate");
+    });
+    it("can be switched off in the policy", () => {
+      const { d } = deps();
+      expect(decide("gh-axi pr list | tail -2", { ...policy, truncation: false }, d).decision).toBe("allow");
     });
   });
 

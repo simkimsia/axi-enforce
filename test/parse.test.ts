@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { argvToCommand, invocations } from "../src/parse.js";
+import { argvToCommand, invocations, pipelines } from "../src/parse.js";
 
 // order is irrelevant to enforcement (inner $(...) is emitted first), so compare sorted
 const programs = (cmd: string) =>
@@ -32,6 +32,10 @@ describe("invocations: catches the CLI wherever it executes", () => {
     ["GH.EXE pr list", ["gh"]],
     ["& 'C:\\Program Files\\GitHub CLI\\gh.exe' api user", ["gh"]],
     ["railway.cmd up; echo done", ["railway", "echo"]],
+    ["for r in a b; do gh pr list; done", ["for", "gh", "done"]],
+    ["if true; then railway up; fi", ["true", "railway", "fi"]],
+    ["gh api user 2>&1 | cat", ["gh", "cat"]],
+    ["gh api user &> out.txt; ls", ["gh", "ls"]],
   ])("%s", (cmd, want) => {
     expect(programs(cmd)).toEqual([...want].sort());
   });
@@ -63,6 +67,23 @@ describe("shell -c scripts are parsed too", () => {
     ['zsh -c "echo \\"$(gh api user)\\""', ["zsh", "echo", "gh"]],
   ])("%s", (cmd, want) => {
     expect(programs(cmd)).toEqual([...want].sort());
+  });
+});
+
+describe("pipelines: which programs share a pipe", () => {
+  const lines = (cmd: string) => pipelines(cmd).map((l) => l.map((i) => i.program));
+  it.each([
+    ["gh-axi pr list | tail -2", [["gh-axi", "tail"]]],
+    ["gh-axi pr list 2>&1 | head -5", [["gh-axi", "head"]]],
+    ["gh-axi pr list |& tail", [["gh-axi", "tail"]]],
+    ["gh-axi pr list || tail x", [["gh-axi"], ["tail"]]],
+    ["gh-axi pr list; tail x", [["gh-axi"], ["tail"]]],
+    ["gh-axi pr list | grep x | cut -c1-9", [["gh-axi", "grep", "cut"]]],
+    ["for r in a b; do gh-axi repo view $r 2>&1 | tail -2; done", [["for"], ["gh-axi", "tail"], ["done"]]],
+    ['echo "$(gh-axi pr list | head -1)"', [["gh-axi", "head"], ["echo"]]],
+    ["bash -lc 'gh-axi pr list | tail -3'", [["bash"], ["gh-axi", "tail"]]],
+  ])("%s", (cmd, want) => {
+    expect(lines(cmd)).toEqual(want);
   });
 });
 

@@ -19,6 +19,8 @@ export interface Policy {
   rules: Rule[];
   /** gap log path */
   log: string;
+  /** refuse `<axi> ... | head|tail|cut` (truncated axi output); default true */
+  truncation: boolean;
 }
 
 /** Wrappers that cover the whole CLI. Inactive unless the axi is installed. */
@@ -50,6 +52,7 @@ interface PolicyFile {
   replaceDefaults?: boolean;
   rules?: Rule[];
   log?: string;
+  truncation?: boolean;
 }
 
 /** Defaults, then the user file: user rules override defaults with the same `tool`. */
@@ -69,6 +72,7 @@ export function loadPolicy(path = policyPath()): Policy {
     owners: file.owners ?? [],
     rules: [...byTool.values()],
     log: file.log || join(stateDir(), "gaps.log"),
+    truncation: file.truncation ?? true,
   };
 }
 

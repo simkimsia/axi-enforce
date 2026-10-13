@@ -11,7 +11,9 @@ export const cursor: Adapter = {
   },
   render(d) {
     if (d.decision === "allow") return { stdout: JSON.stringify({ permission: "allow" }), exitCode: 0 };
-    const user = `axi-enforce: use ${d.rule.axi} instead of ${d.rule.tool}`;
+    const user = d.rule
+      ? `axi-enforce: use ${d.rule.axi} instead of ${d.rule.tool}`
+      : "axi-enforce: don't truncate axi output";
     return {
       stdout: JSON.stringify({
         permission: "deny",

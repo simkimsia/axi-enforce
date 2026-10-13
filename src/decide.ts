@@ -1,4 +1,4 @@
-import { invocations } from "./parse.js";
+import { invocations, pipelines } from "./parse.js";
 import { isOwned, type Policy, type Rule } from "./policy.js";
 
 export type IssueState = "open" | "closed" | "missing" | "unknown";
@@ -13,7 +13,10 @@ export interface Deps {
   now(): Date;
 }
 
-export type Decision = { decision: "allow"; reason?: undefined } | { decision: "deny"; reason: string; rule: Rule };
+export type Decision = { decision: "allow"; reason?: undefined } | { decision: "deny"; reason: string; rule?: Rule };
+
+/** Programs that drop part of their input. */
+const TRUNCATORS = new Set(["head", "tail", "cut"]);
 
 const ALLOW: Decision = { decision: "allow" };
 
@@ -31,6 +34,36 @@ export function decide(command: string, policy: Policy, deps: Deps): Decision {
     if (!deps.onPath(rule.axi)) continue;
     const verdict = judge(command, rule, policy, deps);
     if (verdict.decision === "deny") return verdict;
+  }
+  if (policy.truncation) return truncation(command, policy, deps);
+  return ALLOW;
+}
+
+/**
+ * Axi output is already compact; `| head`, `| tail` or `| cut` hides fields, and an agent then
+ * reports a field or operation as "missing" when it was only cut off.
+ */
+function truncation(command: string, policy: Policy, deps: Deps): Decision {
+  const axis = new Set(policy.rules.map((r) => r.axi));
+  const isAxi = (p: string) => axis.has(p) || p.endsWith("-axi");
+  for (const line of pipelines(command)) {
+    const at = line.findIndex((inv) => isAxi(inv.program));
+    if (at < 0) continue;
+    const cut = line.slice(at + 1).find((inv) => TRUNCATORS.has(inv.program));
+    if (!cut) continue;
+    const axi = line[at].program;
+    if (/(^|[\s;&|(])AXI_TRUNCATE=1(\s|$)/.test(command)) {
+      deps.log(`${deps.now().toISOString()}\t${axi}\ttruncate\t${command.replace(/\s+/g, " ").slice(0, 400)}`);
+      return ALLOW;
+    }
+    return {
+      decision: "deny",
+      reason:
+        `Don't pipe ${axi} through ${cut.program}: axi output is already compact, and truncating it hides fields, ` +
+        `so nothing can be concluded "missing" from what is left. Rerun without \`| ${cut.program}\` and read all of it, ` +
+        `or \`grep\` for the field you need. If you only want part of a long output on purpose (e.g. CI logs), ` +
+        `prefix the command with AXI_TRUNCATE=1, and never report a gap from truncated output.`,
+    };
   }
   return ALLOW;
 }

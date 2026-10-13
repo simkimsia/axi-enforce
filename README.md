@@ -27,6 +27,40 @@ axi-enforce:         deny: Use railway-axi instead of plain railway. Check `rail
 Every allowed bypass is logged (`axi-enforce log`), so the gaps become a backlog you can
 fix in the axi instead of a habit.
 
+## Second job: no conclusions from truncated axi output
+
+Axi output is already compact, so the usual reflex of `| head`, `| tail` or `| cut` only hides
+fields. The failure this causes is quiet: the agent reads what is left and reports that the axi
+lacks a field or an operation, or hides an error, when the information was there and the agent
+cut it off itself.
+
+A real case (2026-10-13, Claude Code): an agent created labels in a loop with
+`gh-axi label create ... 2>&1 | tail -2`. One description was over GitHub's 100-character limit.
+`tail -2` kept only gh-axi's own summary (`error: Validation error` / `code: VALIDATION_ERROR`)
+and dropped GitHub's `HTTP 422 … description is too long (maximum is 100 characters)` printed
+above it. The agent reported "gh-axi returns a bare validation error without saying why" and
+offered to file an upstream issue. There was no gap: plain `gh` and `gh-axi` print the same reason.
+The user's `CLAUDE.md` already said "never pipe an axi through head/tail/cut when the question is
+'does it show X?'", and the agent broke the rule anyway. That is the same argument as for the
+plain-CLI rule: an instruction is a suggestion, and a hook is a check.
+
+So the hook also refuses a pipeline where an axi's output reaches `head`, `tail` or `cut`:
+
+```
+agent wants to run:  for r in a b; do gh-axi label create -R o/$r --name x 2>&1 | tail -2; done
+axi-enforce:         deny: Don't pipe gh-axi through tail: axi output is already compact, and truncating
+                     it hides fields ... Rerun without `| tail` and read all of it, or `grep` for the field.
+```
+
+| Situation                                                                       | What happens                                               |
+| ------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `<axi> ... \| head` / `\| tail` / `\| cut`, anywhere later in the same pipeline | Refused. Read all of it, or `grep` for the field.          |
+| `<axi> ... \| grep x`, or output saved to a file                                | Allowed.                                                   |
+| Deliberately wanting part of a long output (e.g. CI logs)                       | Prefix `AXI_TRUNCATE=1`. Allowed and logged as `truncate`. |
+| You don't want this check                                                       | `"truncation": false` in `policy.json`.                    |
+
+An axi is any program named in a rule's `axi`, or any program whose name ends in `-axi`.
+
 ## Supported agents
 
 | Agent                                     | Mechanism                                                   | Deny reason reaches the model | Notes                                                                         |
@@ -96,7 +130,7 @@ Tell it which axis are yours, so it demands issues for those:
 
 Default rules (each inactive until its axi is on PATH): `gh`→`gh-axi`, `railway`→`railway-axi`,
 `netlify`→`netlify-axi`, `wrangler`→`cloudflare-axi`, `vercel`→`vercel-axi`.
-`"replaceDefaults": true` drops them.
+`"replaceDefaults": true` drops them. `"truncation": false` turns off the truncated-output check.
 
 Try a command without an agent:
 
@@ -113,6 +147,8 @@ A small shell scanner, not a regex over the raw string. It finds the program whe
 would **execute**:
 
 - after `;` `&&` `||` `|` `&`, inside `$(...)`, backticks and `( )`, including `"$(...)"`
+- after shell keywords: `for ...; do gh ...; done`, `if ...; then railway ...; fi`
+- with redirections such as `2>&1`, `>&2` and `&>file` (not mistaken for `&`)
 - behind `VAR=x`, `env`, `sudo`, `command`, `exec`, `time`, `timeout 5`, `xargs`, `nohup`
 - behind `npx`, `bunx`, `uvx`, `pnpm dlx|exec`, `npm exec`, `yarn dlx`, `bun x`
 - inside `bash -lc "..."` / `sh -c '...'` (Codex wraps commands like this), and argv arrays
