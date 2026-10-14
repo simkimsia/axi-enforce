@@ -507,9 +507,28 @@ function walk(cmd: string, depth: number, feed0?: Invocation[]): { out: Invocati
   const frames = new Map<number, Frame[]>();
   // per `( )` subshell: the pipeline piped into it
   const fed = new Map<number, Invocation[]>();
-  // per context: a `function f` waiting for its `{` body
+  // per context: a `function f` waiting for its body in the next segment
   const pendingFn = new Map<number, string>();
   const fns = new Map<string, Body>();
+  // a call's body, with calls in it to functions known now expanded too: `f() { g; }; g() { a; }; f`
+  const expand = (body: Body, seen: Set<string>): Body => {
+    const writes: Invocation[] = [];
+    const reads: Invocation[] = [];
+    const visit = (xs: Invocation[], read: boolean) => {
+      for (const x of xs) {
+        (read ? reads : writes).push(x);
+        const b = fns.get(x.program);
+        if (!b || seen.has(x.program)) continue;
+        seen.add(x.program);
+        const e = expand(b, seen);
+        (read ? reads : writes).push(...e.writes);
+        reads.push(...e.reads);
+      }
+    };
+    visit(body.writes, false);
+    visit(body.reads, true);
+    return { writes, reads };
+  };
   const listOf = <V>(m: Map<number, V[]>, k: number): V[] => {
     let v = m.get(k);
     if (!v) m.set(k, (v = []));
@@ -538,6 +557,8 @@ function walk(cmd: string, depth: number, feed0?: Invocation[]): { out: Invocati
       }
       continue;
     }
+    let fn = pendingFn.get(seg.ctx);
+    pendingFn.delete(seg.ctx);
     const mine = listOf(members, seg.ctx);
     const every = listOf(all, seg.ctx);
     // commands in this segment's `$(...)` / backticks: they read its stdin, their stdout is an argument
@@ -556,6 +577,13 @@ function walk(cmd: string, depth: number, feed0?: Invocation[]): { out: Invocati
       unit = inner;
       feed = fed.get(seg.group);
       away = stdoutAway(ws);
+      if (fn !== undefined) {
+        // `f() ( ... )`: a subshell body
+        const writes = unit;
+        fns.set(fn, { writes, reads: (all.get(seg.group) ?? []).filter((x) => !writes.includes(x)) });
+        unit = [];
+        feed = undefined;
+      }
     } else if (CLOSERS.has(ws[0] ?? "")) {
       const frame = frames.get(seg.ctx)?.pop();
       unit = frame ? mine.slice(frame.start) : [];
@@ -580,19 +608,19 @@ function walk(cmd: string, depth: number, feed0?: Invocation[]): { out: Invocati
     }
 
     if (ws[0] === "function" && ws.length > 1) {
-      pendingFn.set(seg.ctx, ws[1]);
+      fn = ws[1];
       ws = ws.slice(2);
+      if (!ws.length) pendingFn.set(seg.ctx, fn);
     }
     let header = false;
     for (let i = 0; i < ws.length && (RESERVED.has(ws[i]) || HEADERS.has(ws[i])); i++) {
       if (OPENERS.has(ws[i])) {
         // this segment's own `$(...)` runs inside the group: `{ echo "$(head)"; }`
         const frame: Frame = { start: mine.length, allStart: every.length - reads.length, feed: open.get(seg.ctx) };
-        const fn = pendingFn.get(seg.ctx);
         if (fn !== undefined) {
           frame.fn = fn;
           frame.feed = undefined;
-          pendingFn.delete(seg.ctx);
+          fn = undefined;
         }
         listOf(frames, seg.ctx).push(frame);
       }
@@ -617,7 +645,8 @@ function walk(cmd: string, depth: number, feed0?: Invocation[]): { out: Invocati
     if (piped) join(line, [], reads);
     if (seg.pipe) open.set(seg.ctx, line);
     else open.delete(seg.ctx);
-    const body = fns.get(inv.program);
+    const def = fns.get(inv.program);
+    const body = def && expand(def, new Set([inv.program]));
     if (body) {
       // a call runs the body: `f | head` truncates whatever f prints
       mine.push(...body.writes);
