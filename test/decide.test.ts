@@ -93,6 +93,7 @@ describe("decide", () => {
       "gh-axi pr list --limit $((n)) | tail",
       "gh-axi pr list | bash -c 'head -2'",
       'gh-axi pr list | sh -c "tail -1"',
+      "N=$(( 1 + 2 )) gh-axi pr list | head",
     ])("denies %s", (cmd) => {
       const { d } = deps();
       const r = decide(cmd, policy, d);
@@ -113,6 +114,8 @@ describe("decide", () => {
       // the pipe applies to echo's output; the axi output only reaches it as an argument
       "echo $(gh-axi pr list) | head",
       "$(gh-axi pr list) | head",
+      "bash -c 'echo $(gh-axi pr list)' | head",
+      "bash -c 'echo `gh-axi pr list`' | tail",
     ])("allows %s", (cmd) => {
       const { d } = deps();
       expect(decide(cmd, policy, d).decision).toBe("allow");

@@ -36,6 +36,7 @@ describe("invocations: catches the CLI wherever it executes", () => {
     ["if true; then railway up; fi", ["true", "railway", "fi"]],
     ["gh api user 2>&1 | cat", ["gh", "cat"]],
     ["gh api user &> out.txt; ls", ["gh", "ls"]],
+    ["N=$(( 1 + 2 )) gh pr list", ["gh"]],
     // an escaped `\>` is a literal, so the `&` backgrounds echo and gh runs (#8)
     ["echo \\>& gh pr list", ["echo", "gh"]],
     // `$((` that closes with a single `)` is a subshell inside `$(`, not arithmetic

@@ -288,6 +288,19 @@ export function words(segment: string): string[] {
       has = true;
       continue;
     }
+    // arithmetic `$(( 1 + 2 ))` is one word, spaces and all
+    if (c === "$" && segment.startsWith("((", i + 1)) {
+      let depth = 0;
+      let j = i + 1;
+      for (; j < segment.length; j++) {
+        if (segment[j] === "(") depth++;
+        else if (segment[j] === ")" && --depth === 0) break;
+      }
+      cur += segment.slice(i, j + 1);
+      has = true;
+      i = j;
+      continue;
+    }
     if (/\s/.test(c)) {
       if (has || cur) out.push(cur);
       cur = "";
@@ -384,6 +397,11 @@ interface Frame {
  * `$(...)` and backticks feed arguments, not stdin, so they never join the outer pipeline.
  */
 export function pipelines(cmd: string, depth = 0): Invocation[][] {
+  return walk(cmd, depth).out;
+}
+
+/** `pipelines()`, plus `top`: the invocations whose stdout is the command's own stdout. */
+function walk(cmd: string, depth: number): { out: Invocation[][]; top: Invocation[] } {
   const out: Invocation[][] = [];
   // open pipeline per context: segments of one context arrive in order, inner contexts interleave
   const open = new Map<number, Invocation[]>();
@@ -458,17 +476,18 @@ export function pipelines(cmd: string, depth = 0): Invocation[][] {
     else open.delete(seg.ctx);
     const script = depth < 4 ? shellScript(inv) : null;
     if (script) {
-      const inner = pipelines(script, depth + 1);
-      // a pipe into the wrapper feeds the script's first pipeline: `gh-axi ... | bash -c 'head'`
-      if (piped && inner.length) line.push(...inner[0]);
-      out.push(...(piped ? inner.slice(1) : inner));
-      // the script's output is the wrapper's output: `bash -c 'gh-axi ...' | head` truncates gh-axi
-      const ran = inner.flat();
-      mine.push(...ran);
-      if (seg.pipe) for (const r of ran) if (!line.includes(r)) line.push(r);
+      const inner = walk(script, depth + 1);
+      // a pipe into the wrapper feeds the script's first top-level pipeline: `gh-axi ... | bash -c 'head'`
+      const first = piped ? inner.out.find((l) => l.some((x) => inner.top.includes(x))) : undefined;
+      if (first) line.push(...first);
+      out.push(...inner.out.filter((l) => l !== first));
+      // the script's output is the wrapper's output: `bash -c 'gh-axi ...' | head` truncates gh-axi.
+      // Commands inside its $(...) or backticks only feed arguments, so they stay out.
+      mine.push(...inner.top);
+      if (seg.pipe) for (const x of inner.top) if (!line.includes(x)) line.push(x);
     }
   }
-  return out;
+  return { out, top: members.get(0) ?? [] };
 }
 
 /** Turn an argv array (as some agents send) into a shell string with the same meaning. */
