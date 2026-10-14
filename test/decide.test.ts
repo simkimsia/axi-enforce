@@ -81,6 +81,8 @@ describe("decide", () => {
       "gh-axi pr list | (head -2)",
       "cd x && (gh-axi pr list; echo) | tail",
       "if true; then { gh-axi pr list; }; fi | cut -c1-9",
+      "N=$((n+1)) gh-axi pr list | head",
+      "x=(a b) gh-axi pr list | head",
     ])("denies %s", (cmd) => {
       const { d } = deps();
       const r = decide(cmd, policy, d);

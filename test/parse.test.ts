@@ -99,6 +99,8 @@ describe("pipelines: which programs share a pipe", () => {
     ["gh-axi pr list | while read r; do echo $r; done", [["gh-axi", "read"], ["echo"]]],
     ["{ gh-axi pr list; } | grep x | cut -c1-9", [["gh-axi"], ["gh-axi", "grep", "cut"]]],
     ["gh-axi pr list; echo | head", [["gh-axi"], ["echo", "head"]]],
+    ["N=$((n+1)) gh-axi pr list | head", [["n+1"], ["gh-axi", "head"]]],
+    ["x=(a b) gh-axi pr list | head", [["a"], ["gh-axi", "head"]]],
     ["for r in a b; do gh-axi repo view $r; done; echo | head", [["gh-axi"], ["echo", "head"]]],
     // $(...) feeds an argument, not stdin, so it never joins the outer pipeline
     ["echo $(gh-axi pr list) | head", [["gh-axi"], ["echo", "head"]]],

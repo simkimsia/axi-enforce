@@ -327,6 +327,8 @@ export function invocations(cmd: string, depth = 0): Invocation[] {
 const OPENERS = new Set(["{", "if", "while", "until", "for", "select"]);
 /** `for x in a b`, `select x in a b`: the rest of the segment is a word list, not a command. */
 const HEADERS = new Set(["for", "select"]);
+/** A word that starts a redirection: `>f`, `2>&1`, `&>f`, `<f`. */
+const REDIRECTION = /^(\d+|&)?[<>]/;
 /** Words that close a compound command. A `|` after them pipes the whole group's output. */
 const CLOSERS = new Set(["}", "fi", "done"]);
 
@@ -380,9 +382,9 @@ export function pipelines(cmd: string, depth = 0): Invocation[][] {
     let unit: Invocation[] | null = null;
     let feed: Invocation[] | undefined;
     const inner = seg.group === undefined ? undefined : members.get(seg.group);
-    if (seg.group !== undefined && inner?.length) {
+    if (inner?.length) mine.push(...inner);
+    if (seg.group !== undefined && inner?.length && (!ws.length || REDIRECTION.test(ws[0]))) {
       unit = inner;
-      mine.push(...inner);
       feed = fed.get(seg.group);
     } else if (CLOSERS.has(ws[0] ?? "")) {
       const frame = frames.get(seg.ctx)?.pop();
