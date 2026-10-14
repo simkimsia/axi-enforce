@@ -192,3 +192,5 @@ OpenCode plugin. Adding an agent = one adapter in `src/adapters/`, one entry in
 ## License
 
 MIT
+
+This line is a throwaway Greptile smoke test and will not be merged.
