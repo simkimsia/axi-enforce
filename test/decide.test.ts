@@ -87,6 +87,10 @@ describe("decide", () => {
       "if true; then { gh-axi pr list; }; fi | cut -c1-9",
       "N=$((n+1)) gh-axi pr list | head",
       "x=(a b) gh-axi pr list | head",
+      "gh-axi pr view $((n+1)) | head",
+      "gh-axi pr list --limit $((n)) | tail",
+      "gh-axi pr list | bash -c 'head -2'",
+      'gh-axi pr list | sh -c "tail -1"',
     ])("denies %s", (cmd) => {
       const { d } = deps();
       const r = decide(cmd, policy, d);
@@ -103,6 +107,7 @@ describe("decide", () => {
       "for r in a b; do gh-axi repo view $r; done; echo | head",
       "(gh-axi pr list); echo | head",
       "bash -lc 'gh-axi pr list > f; tail f'",
+      "gh-axi pr list | bash -c 'cat'",
       // the pipe applies to echo's output; the axi output only reaches it as an argument
       "echo $(gh-axi pr list) | head",
       "$(gh-axi pr list) | head",

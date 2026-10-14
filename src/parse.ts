@@ -105,6 +105,7 @@ export function scan(cmd: string): Segment[] {
   const src = stripHeredocs(cmd);
   const segs: Segment[] = [];
   // context stack: "root" | "sub" ($(...)) | "grp" (a `( )` subshell) | "bt" (backtick) | "dq" | "sq"
+  // | "ar" (arithmetic `$((...))`) | "ap" (a parenthesis inside it)
   const stack: string[] = ["root"];
   // one text buffer per executable context; quoted text is appended to the enclosing buffer
   const bufs: string[] = [""];
@@ -161,7 +162,14 @@ export function scan(cmd: string): Segment[] {
       i++;
       continue;
     }
-    if (c === "$" && src[i + 1] === "(" && src[i + 2] !== "(") {
+    if (c === "$" && src[i + 1] === "(" && src[i + 2] === "(") {
+      // arithmetic `$((...))` is part of the word, not a subshell
+      add("$((");
+      stack.push("ar");
+      i += 2;
+      continue;
+    }
+    if (c === "$" && src[i + 1] === "(") {
       add("_"); // placeholder so `x=$(...)` stays one word in the outer segment
       push("sub");
       i++;
@@ -178,6 +186,17 @@ export function scan(cmd: string): Segment[] {
     if (ctx === "dq") {
       add(c);
       if (c === '"') stack.pop();
+      continue;
+    }
+    if (ctx === "ar" || ctx === "ap") {
+      add(c);
+      if (c === "(") stack.push("ap");
+      else if (c === ")" && ctx === "ap") stack.pop();
+      else if (c === ")" && src[i + 1] === ")") {
+        add(")");
+        i++;
+        stack.pop();
+      }
       continue;
     }
     // executable context: root, sub, bt
@@ -418,22 +437,22 @@ export function pipelines(cmd: string, depth = 0): Invocation[][] {
       continue;
     }
     mine.push(inv);
-    let line = open.get(seg.ctx);
-    if (!line) {
-      line = [];
-      out.push(line);
-    }
+    const piped = open.get(seg.ctx);
+    const line = piped ?? [];
+    if (!piped) out.push(line);
     line.push(inv);
     if (seg.pipe) open.set(seg.ctx, line);
     else open.delete(seg.ctx);
     const script = depth < 4 ? shellScript(inv) : null;
     if (script) {
       const inner = pipelines(script, depth + 1);
-      out.push(...inner);
+      // a pipe into the wrapper feeds the script's first pipeline: `gh-axi ... | bash -c 'head'`
+      if (piped && inner.length) line.push(...inner[0]);
+      out.push(...(piped ? inner.slice(1) : inner));
       // the script's output is the wrapper's output: `bash -c 'gh-axi ...' | head` truncates gh-axi
       const ran = inner.flat();
       mine.push(...ran);
-      if (seg.pipe) line.push(...ran);
+      if (seg.pipe) for (const r of ran) if (!line.includes(r)) line.push(r);
     }
   }
   return out;
