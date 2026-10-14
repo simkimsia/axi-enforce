@@ -79,6 +79,10 @@ describe("decide", () => {
       "(gh-axi pr list) | head",
       "(gh-axi pr list) |& head",
       "gh-axi pr list | (head -2)",
+      "gh-axi pr list | ( (head -2) )",
+      "(bash -lc 'gh-axi pr list') | head",
+      "bash -lc 'gh-axi pr list' | head",
+      "{ sh -c 'gh-axi pr list'; } | tail",
       "cd x && (gh-axi pr list; echo) | tail",
       "if true; then { gh-axi pr list; }; fi | cut -c1-9",
       "N=$((n+1)) gh-axi pr list | head",
@@ -98,6 +102,7 @@ describe("decide", () => {
       "gh-axi pr list; echo | head",
       "for r in a b; do gh-axi repo view $r; done; echo | head",
       "(gh-axi pr list); echo | head",
+      "bash -lc 'gh-axi pr list > f; tail f'",
       // the pipe applies to echo's output; the axi output only reaches it as an argument
       "echo $(gh-axi pr list) | head",
       "$(gh-axi pr list) | head",

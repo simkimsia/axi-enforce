@@ -83,6 +83,8 @@ export interface Segment {
   parent?: number;
   /** set when this segment closes a `( )` subshell (`(...) | head`): that subshell's context id */
   group?: number;
+  /** an empty marker: the `( )` subshell `ctx` opens here, so a pipe into it can follow in order */
+  opens?: boolean;
 }
 
 /** Split into simple-command segments, following the contexts where code executes. */
@@ -133,6 +135,7 @@ export function scan(cmd: string): Segment[] {
     ids.push(nextId++);
     parents.push(ctx === "grp" ? parent : undefined);
     closed.push(undefined);
+    if (ctx === "grp") segs.push({ text: "", pipe: false, ctx: ids[ids.length - 1], parent, opens: true });
   };
   const pop = () => {
     flush();
@@ -358,7 +361,6 @@ export function pipelines(cmd: string, depth = 0): Invocation[][] {
   const frames = new Map<number, Frame[]>();
   // per `( )` subshell: the pipeline piped into it
   const fed = new Map<number, Invocation[]>();
-  const seen = new Set<number>();
   const listOf = <V>(m: Map<number, V[]>, k: number): V[] => {
     let v = m.get(k);
     if (!v) m.set(k, (v = []));
@@ -366,14 +368,15 @@ export function pipelines(cmd: string, depth = 0): Invocation[][] {
   };
 
   for (const seg of scan(cmd)) {
-    if (!seen.has(seg.ctx)) {
-      seen.add(seg.ctx);
+    if (seg.opens) {
+      // a pipe into `( )` continues into the subshell, and on into a nested one: `a | ((b))`
       const feed = seg.parent === undefined ? undefined : open.get(seg.parent);
       if (feed && seg.parent !== undefined) {
         open.delete(seg.parent);
         open.set(seg.ctx, feed);
         fed.set(seg.ctx, feed);
       }
+      continue;
     }
     const mine = listOf(members, seg.ctx);
     const ws = words(seg.text);
@@ -424,7 +427,14 @@ export function pipelines(cmd: string, depth = 0): Invocation[][] {
     if (seg.pipe) open.set(seg.ctx, line);
     else open.delete(seg.ctx);
     const script = depth < 4 ? shellScript(inv) : null;
-    if (script) out.push(...pipelines(script, depth + 1));
+    if (script) {
+      const inner = pipelines(script, depth + 1);
+      out.push(...inner);
+      // the script's output is the wrapper's output: `bash -c 'gh-axi ...' | head` truncates gh-axi
+      const ran = inner.flat();
+      mine.push(...ran);
+      if (seg.pipe) line.push(...ran);
+    }
   }
   return out;
 }
