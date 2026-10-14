@@ -38,6 +38,8 @@ describe("invocations: catches the CLI wherever it executes", () => {
     ["gh api user &> out.txt; ls", ["gh", "ls"]],
     // an escaped `\>` is a literal, so the `&` backgrounds echo and gh runs (#8)
     ["echo \\>& gh pr list", ["echo", "gh"]],
+    // `$((` that closes with a single `)` is a subshell inside `$(`, not arithmetic
+    ["x=$((gh pr list) | wc -l); echo $x", ["echo", "gh", "wc"]],
     ["echo \\\\>& gh pr list", ["echo"]],
     ["f() { gh pr list; }", ["f", "gh", "}"]],
   ])("%s", (cmd, want) => {

@@ -37,6 +37,7 @@ describe("decide", () => {
     const r = decide("cd repo && gh pr list", policy, d);
     expect(r.decision).toBe("deny");
     expect(r.reason).toContain("gh-axi");
+    expect(decide("x=$((gh pr list) | wc -l)", policy, d).decision).toBe("deny");
   });
 
   it("stays out of the way when the axi is not installed", () => {
@@ -88,6 +89,7 @@ describe("decide", () => {
       "N=$((n+1)) gh-axi pr list | head",
       "x=(a b) gh-axi pr list | head",
       "gh-axi pr view $((n+1)) | head",
+      "echo $((gh-axi pr list) | head)",
       "gh-axi pr list --limit $((n)) | tail",
       "gh-axi pr list | bash -c 'head -2'",
       'gh-axi pr list | sh -c "tail -1"',

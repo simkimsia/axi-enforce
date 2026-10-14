@@ -100,6 +100,19 @@ function endsInRedirect(buf: string): boolean {
   return m !== null && m[1].length % 2 === 0;
 }
 
+/** The `(` at `open` closes with `))`: `$((n+1))` is arithmetic, `$((cmd) | x)` a subshell in `$(`. */
+function arithmetic(src: string, open: number): boolean {
+  if (src[open] !== "(") return false;
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    const c = src[i];
+    if (c === "\\") i++;
+    else if (c === "(") depth++;
+    else if (c === ")" && --depth === 0) return src[i + 1] === ")";
+  }
+  return false;
+}
+
 /** Like `segments`, with pipe links and context ids, so pipelines can be rebuilt. */
 export function scan(cmd: string): Segment[] {
   const src = stripHeredocs(cmd);
@@ -162,7 +175,7 @@ export function scan(cmd: string): Segment[] {
       i++;
       continue;
     }
-    if (c === "$" && src[i + 1] === "(" && src[i + 2] === "(") {
+    if (c === "$" && src[i + 1] === "(" && arithmetic(src, i + 2)) {
       // arithmetic `$((...))` is part of the word, not a subshell
       add("$((");
       stack.push("ar");
