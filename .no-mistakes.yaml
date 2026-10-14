@@ -20,6 +20,8 @@ test:
     and read the allow/deny output. README.md claims what gets refused; check those
     claims against decide-level behaviour.
     Never run `axi-enforce install` or `uninstall` against the real home directory: they
-    edit the operator's live agent configs. Set AXI_ENFORCE_HOME, AXI_ENFORCE_POLICY,
-    XDG_CONFIG_HOME and XDG_STATE_HOME to a temporary directory first (read in
-    src/install.ts and src/policy.ts).
+    edit the operator's live agent configs. Set AXI_ENFORCE_HOME, XDG_CONFIG_HOME and
+    XDG_STATE_HOME to a temporary directory first. Set AXI_ENFORCE_POLICY to a JSON
+    file path inside that directory, not the directory itself: a directory makes
+    loadPolicy() throw, and the hook then fails open (read in src/install.ts and
+    src/policy.ts).
