@@ -21,4 +21,5 @@ test:
     claims against decide-level behaviour.
     Never run `axi-enforce install` or `uninstall` against the real home directory: they
     edit the operator's live agent configs. Set AXI_ENFORCE_HOME, AXI_ENFORCE_POLICY,
-    XDG_CONFIG_HOME and XDG_STATE_HOME to a temporary directory first, as the e2e suite does.
+    XDG_CONFIG_HOME and XDG_STATE_HOME to a temporary directory first (read in
+    src/install.ts and src/policy.ts).
