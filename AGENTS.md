@@ -37,3 +37,13 @@ instead of the plain CLIs they wrap, with an issue-backed escape hatch for gaps.
   before `pnpm test`.
 - Cross-platform: no `/bin/sh`, no `:` PATH joins, no exec-bit assumptions outside
   `deps.ts`. CI runs ubuntu/macos/windows.
+
+## Shipping changes
+
+- Changes reach `main` through the `no-mistakes` gate, never a plain `git push origin`.
+  Commit on a feature branch, then run `no-mistakes axi run --intent "..."`, or
+  `git push no-mistakes <branch>`. The gate reviews, tests, lints and opens the PR.
+  First-time setup in a clone: `no-mistakes init` (adds the `no-mistakes` remote).
+- Gate commands live in `.no-mistakes.yaml`, which the gate reads from `main` only.
+- Greptile reviews every PR. It does not re-review new commits on its own: comment
+  `@greptileai please re-review the latest head (<sha>)` after each push.

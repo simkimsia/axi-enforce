@@ -1,0 +1,24 @@
+# no-mistakes gate config for axi-enforce (issue #10).
+# commands, test.prepare and test.instructions are read only from the copy on main,
+# so a change here takes effect for the runs after it merges.
+
+commands:
+  # Run worktrees start with tracked files only, so node_modules and dist/ are absent.
+  prepare: "pnpm install --frozen-lockfile"
+  # Deterministic gate: prettier plus tsc (the build is the type check).
+  lint: "pnpm run format:check && pnpm run build"
+  format: "pnpm run format"
+
+test:
+  # Test stays agent-driven (targeted), but it gets dependencies installed first.
+  prepare: true
+  instructions: |
+    Build before testing: run `pnpm run build`, then `pnpm test`. test/hook.e2e.test.ts
+    runs the built dist/, so a stale or missing dist/ gives false results.
+    To drive the product the way an agent does, pipe that agent's hook payload into
+    `node dist/bin/axi-enforce.js hook <agent>` (payload shapes are in test/hook.e2e.test.ts)
+    and read the allow/deny output. README.md claims what gets refused; check those
+    claims against decide-level behaviour.
+    Never run `axi-enforce install` or `uninstall` against the real home directory: they
+    edit the operator's live agent configs. Set AXI_ENFORCE_HOME, AXI_ENFORCE_POLICY,
+    XDG_CONFIG_HOME and XDG_STATE_HOME to a temporary directory first, as the e2e suite does.
