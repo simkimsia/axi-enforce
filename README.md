@@ -55,11 +55,15 @@ axi-enforce:         deny: Don't pipe gh-axi through tail: axi output is already
 | Situation                                                                       | What happens                                               |
 | ------------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | `<axi> ... \| head` / `\| tail` / `\| cut`, anywhere later in the same pipeline | Refused. Read all of it, or `grep` for the field.          |
+| `{ <axi>; } \| head`, also `( )`, loops and `if ... fi`; `<axi> \| (head)`      | Refused, same reason.                                      |
 | `<axi> ... \| grep x`, or output saved to a file                                | Allowed.                                                   |
 | Deliberately wanting part of a long output (e.g. CI logs)                       | Prefix `AXI_TRUNCATE=1`. Allowed and logged as `truncate`. |
 | You don't want this check                                                       | `"truncation": false` in `policy.json`.                    |
 
 An axi is any program named in a rule's `axi`, or any program whose name ends in `-axi`.
+
+`$(<axi> ...) | head` is allowed: the pipe truncates the outer command's output, and the axi
+output only reaches it as an argument.
 
 ## Supported agents
 
@@ -148,7 +152,8 @@ would **execute**:
 
 - after `;` `&&` `||` `|` `&`, inside `$(...)`, backticks and `( )`, including `"$(...)"`
 - after shell keywords: `for ...; do gh ...; done`, `if ...; then railway ...; fi`
-- with redirections such as `2>&1`, `>&2` and `&>file` (not mistaken for `&`)
+- with redirections such as `2>&1`, `>&2` and `&>file` (not mistaken for `&`), while an escaped
+  `\>&` still separates commands
 - behind `VAR=x`, `env`, `sudo`, `command`, `exec`, `time`, `timeout 5`, `xargs`, `nohup`
 - behind `npx`, `bunx`, `uvx`, `pnpm dlx|exec`, `npm exec`, `yarn dlx`, `bun x`
 - inside `bash -lc "..."` / `sh -c '...'` (Codex wraps commands like this), and argv arrays

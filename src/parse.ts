@@ -79,39 +79,69 @@ export interface Segment {
   pipe: boolean;
   /** id of the executable context (root, a `$(...)`, a backtick, a `( )`) it was found in */
   ctx: number;
+  /** set when `ctx` is a `( )` subshell: the id of the context around it */
+  parent?: number;
+  /** set when this segment closes a `( )` subshell (`(...) | head`): that subshell's context id */
+  group?: number;
 }
 
 /** Split into simple-command segments, following the contexts where code executes. */
 export function segments(cmd: string): string[] {
-  return scan(cmd).map((s) => s.text);
+  return scan(cmd)
+    .map((s) => s.text)
+    .filter((t) => t);
+}
+
+/** `>` or `<` at the end of `buf`, not escaped: the `&` after it belongs to a redirection (`2>&1`). */
+function endsInRedirect(buf: string): boolean {
+  const m = buf.match(/(\\*)[<>]$/);
+  return m !== null && m[1].length % 2 === 0;
 }
 
 /** Like `segments`, with pipe links and context ids, so pipelines can be rebuilt. */
 export function scan(cmd: string): Segment[] {
   const src = stripHeredocs(cmd);
   const segs: Segment[] = [];
-  // context stack: "root" | "sub" ($( or ( ) | "bt" (backtick) | "dq" | "sq"
+  // context stack: "root" | "sub" ($(...)) | "grp" (a `( )` subshell) | "bt" (backtick) | "dq" | "sq"
   const stack: string[] = ["root"];
   // one text buffer per executable context; quoted text is appended to the enclosing buffer
   const bufs: string[] = [""];
   const ids: number[] = [0];
+  // per buffer: the parent id when the context is a `( )` subshell
+  const parents: (number | undefined)[] = [undefined];
+  // per buffer: a `( )` subshell that just closed in it, so the next flush carries it even if empty
+  const closed: (number | undefined)[] = [undefined];
   let nextId = 1;
   const top = () => stack[stack.length - 1];
   const flush = (pipe = false) => {
-    const s = bufs[bufs.length - 1].trim();
-    if (s) segs.push({ text: s, pipe, ctx: ids[ids.length - 1] });
-    bufs[bufs.length - 1] = "";
+    const k = bufs.length - 1;
+    const s = bufs[k].trim();
+    const group = closed[k];
+    if (s || group !== undefined) {
+      const seg: Segment = { text: s, pipe, ctx: ids[k] };
+      if (parents[k] !== undefined) seg.parent = parents[k];
+      if (group !== undefined) seg.group = group;
+      segs.push(seg);
+    }
+    bufs[k] = "";
+    closed[k] = undefined;
   };
   const push = (ctx: string) => {
+    const parent = ids[ids.length - 1];
     stack.push(ctx);
     bufs.push("");
     ids.push(nextId++);
+    parents.push(ctx === "grp" ? parent : undefined);
+    closed.push(undefined);
   };
   const pop = () => {
     flush();
-    stack.pop();
+    const kind = stack.pop();
     bufs.pop();
-    ids.pop();
+    const id = ids.pop();
+    parents.pop();
+    closed.pop();
+    if (kind === "grp") closed[closed.length - 1] = id;
   };
   const add = (c: string) => (bufs[bufs.length - 1] += c);
 
@@ -158,17 +188,18 @@ export function scan(cmd: string): Segment[] {
       stack.push("dq");
       continue;
     }
-    if (c === ")" && ctx === "sub") {
+    if (c === ")" && (ctx === "sub" || ctx === "grp")) {
       pop();
       continue;
     }
     if (c === "(") {
       flush();
-      push("sub");
+      push("grp");
       continue;
     }
-    // `2>&1`, `>&2`, `&>file`: part of a redirection, not a separator
-    if (c === "&" && (/[<>]$/.test(bufs[bufs.length - 1]) || src[i + 1] === ">")) {
+    // `2>&1`, `>&2`, `&>file`: part of a redirection, not a separator. An escaped `\>` is a
+    // literal character, so `echo \>& gh` still runs gh in the background.
+    if (c === "&" && (endsInRedirect(bufs[bufs.length - 1]) || src[i + 1] === ">")) {
       add(c);
       continue;
     }
@@ -192,6 +223,8 @@ export function scan(cmd: string): Segment[] {
     flush();
     bufs.pop();
     ids.pop();
+    parents.pop();
+    closed.pop();
   }
   return segs;
 }
@@ -290,20 +323,96 @@ export function invocations(cmd: string, depth = 0): Invocation[] {
   return out;
 }
 
+/** Words that open a compound command: `{ ...; }`, `if ...; fi`, loops `...; done`. */
+const OPENERS = new Set(["{", "if", "while", "until", "for", "select"]);
+/** `for x in a b`, `select x in a b`: the rest of the segment is a word list, not a command. */
+const HEADERS = new Set(["for", "select"]);
+/** Words that close a compound command. A `|` after them pipes the whole group's output. */
+const CLOSERS = new Set(["}", "fi", "done"]);
+
+interface Frame {
+  /** index into the context's members where the group starts */
+  start: number;
+  /** the pipeline piped into the group, if any (`x | while read r; do ...; done`) */
+  feed?: Invocation[];
+}
+
 /**
  * The pipelines in a command, as lists of invocations joined by `|`, in order.
  * `a | b; c` -> [[a, b], [c]]. Shell -c scripts contribute their own pipelines.
+ *
+ * A group piped onward counts as one stage holding everything run inside it:
+ * `{ a; b; } | c`, `(a; b) | c`, `for ...; do a; done | c` -> [..., [a, b, c]].
+ * A pipe into a `( )` subshell continues into its first command: `a | (b)` -> [[a, b]].
+ * `$(...)` and backticks feed arguments, not stdin, so they never join the outer pipeline.
  */
 export function pipelines(cmd: string, depth = 0): Invocation[][] {
   const out: Invocation[][] = [];
   // open pipeline per context: segments of one context arrive in order, inner contexts interleave
   const open = new Map<number, Invocation[]>();
+  // per context: every invocation that runs there, including inside its `( )` subshells
+  const members = new Map<number, Invocation[]>();
+  // per context: the `{ }` / `if` / loop groups not yet closed
+  const frames = new Map<number, Frame[]>();
+  // per `( )` subshell: the pipeline piped into it
+  const fed = new Map<number, Invocation[]>();
+  const seen = new Set<number>();
+  const listOf = <V>(m: Map<number, V[]>, k: number): V[] => {
+    let v = m.get(k);
+    if (!v) m.set(k, (v = []));
+    return v;
+  };
+
   for (const seg of scan(cmd)) {
-    const inv = resolve(words(seg.text));
+    if (!seen.has(seg.ctx)) {
+      seen.add(seg.ctx);
+      const feed = seg.parent === undefined ? undefined : open.get(seg.parent);
+      if (feed && seg.parent !== undefined) {
+        open.delete(seg.parent);
+        open.set(seg.ctx, feed);
+        fed.set(seg.ctx, feed);
+      }
+    }
+    const mine = listOf(members, seg.ctx);
+    const ws = words(seg.text);
+
+    // a group ends here: everything run inside it is this stage of the pipeline
+    let unit: Invocation[] | null = null;
+    let feed: Invocation[] | undefined;
+    const inner = seg.group === undefined ? undefined : members.get(seg.group);
+    if (seg.group !== undefined && inner?.length) {
+      unit = inner;
+      mine.push(...inner);
+      feed = fed.get(seg.group);
+    } else if (CLOSERS.has(ws[0] ?? "")) {
+      const frame = frames.get(seg.ctx)?.pop();
+      unit = frame ? mine.slice(frame.start) : [];
+      feed = frame?.feed;
+    }
+    if (unit) {
+      if (seg.pipe && (feed || unit.length)) {
+        const line = feed ?? [];
+        if (!feed) out.push(line);
+        for (const inv of unit) if (!line.includes(inv)) line.push(inv);
+        open.set(seg.ctx, line);
+      } else open.delete(seg.ctx);
+      continue;
+    }
+
+    let header = false;
+    for (let i = 0; i < ws.length && (RESERVED.has(ws[i]) || HEADERS.has(ws[i])); i++) {
+      if (OPENERS.has(ws[i])) listOf(frames, seg.ctx).push({ start: mine.length, feed: open.get(seg.ctx) });
+      if (HEADERS.has(ws[i])) {
+        header = true;
+        break;
+      }
+    }
+    const inv = header ? null : resolve(ws);
     if (!inv) {
       open.delete(seg.ctx);
       continue;
     }
+    mine.push(inv);
     let line = open.get(seg.ctx);
     if (!line) {
       line = [];

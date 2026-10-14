@@ -36,6 +36,10 @@ describe("invocations: catches the CLI wherever it executes", () => {
     ["if true; then railway up; fi", ["true", "railway", "fi"]],
     ["gh api user 2>&1 | cat", ["gh", "cat"]],
     ["gh api user &> out.txt; ls", ["gh", "ls"]],
+    // an escaped `\>` is a literal, so the `&` backgrounds echo and gh runs (#8)
+    ["echo \\>& gh pr list", ["echo", "gh"]],
+    ["echo \\\\>& gh pr list", ["echo"]],
+    ["f() { gh pr list; }", ["f", "gh", "}"]],
   ])("%s", (cmd, want) => {
     expect(programs(cmd)).toEqual([...want].sort());
   });
@@ -51,6 +55,8 @@ describe("invocations: ignores text that never executes", () => {
     ["cat <<'EOF' > notes.md\ngh api user\nrailway up\nEOF\nls", ["cat", "ls"]],
     ["git commit -F - <<EOF\nfix: gh pr list broke\nEOF", ["git"]],
     ["cat <<< 'gh api'", ["cat"]],
+    // `>&` here is a redirection: bash writes echo's output to a file named gh (#8)
+    ["echo >& gh pr list", ["echo"]],
   ])("%s", (cmd, want) => {
     expect(programs(cmd)).toEqual([...want].sort());
   });
@@ -79,7 +85,23 @@ describe("pipelines: which programs share a pipe", () => {
     ["gh-axi pr list || tail x", [["gh-axi"], ["tail"]]],
     ["gh-axi pr list; tail x", [["gh-axi"], ["tail"]]],
     ["gh-axi pr list | grep x | cut -c1-9", [["gh-axi", "grep", "cut"]]],
-    ["for r in a b; do gh-axi repo view $r 2>&1 | tail -2; done", [["for"], ["gh-axi", "tail"], ["done"]]],
+    ["for r in a b; do gh-axi repo view $r 2>&1 | tail -2; done", [["gh-axi", "tail"]]],
+    // a group piped onward is one stage holding everything run inside it (#8)
+    ["for r in a b; do gh-axi repo view $r; done | tail -2", [["gh-axi"], ["gh-axi", "tail"]]],
+    ["while read r; do gh-axi repo view $r; done < f | head", [["read"], ["gh-axi"], ["read", "gh-axi", "head"]]],
+    ["if true; then gh-axi pr list; fi | head", [["true"], ["gh-axi"], ["true", "gh-axi", "head"]]],
+    ["{ gh-axi pr list; echo; } | head", [["gh-axi"], ["echo"], ["gh-axi", "echo", "head"]]],
+    ["(gh-axi pr list) | head", [["gh-axi"], ["gh-axi", "head"]]],
+    ["(gh-axi pr list) 2>&1 |& head", [["gh-axi"], ["gh-axi", "head"]]],
+    ["((gh-axi pr list)) | head", [["gh-axi"], ["gh-axi", "head"]]],
+    ["gh-axi pr list | (head -2)", [["gh-axi", "head"]]],
+    ["gh-axi pr list | (cat) | head", [["gh-axi", "cat", "head"]]],
+    ["gh-axi pr list | while read r; do echo $r; done", [["gh-axi", "read"], ["echo"]]],
+    ["{ gh-axi pr list; } | grep x | cut -c1-9", [["gh-axi"], ["gh-axi", "grep", "cut"]]],
+    ["gh-axi pr list; echo | head", [["gh-axi"], ["echo", "head"]]],
+    ["for r in a b; do gh-axi repo view $r; done; echo | head", [["gh-axi"], ["echo", "head"]]],
+    // $(...) feeds an argument, not stdin, so it never joins the outer pipeline
+    ["echo $(gh-axi pr list) | head", [["gh-axi"], ["echo", "head"]]],
     ['echo "$(gh-axi pr list | head -1)"', [["gh-axi", "head"], ["echo"]]],
     ["bash -lc 'gh-axi pr list | tail -3'", [["bash"], ["gh-axi", "tail"]]],
   ])("%s", (cmd, want) => {

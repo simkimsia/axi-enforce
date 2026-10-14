@@ -69,6 +69,18 @@ describe("decide", () => {
       "for r in a b; do gh-axi label create -R o/$r --name x 2>&1 | tail -2; done",
       "railway-axi status | grep env | cut -c1-40",
       "foo-axi list | head",
+      // a truncator after a compound command (#8)
+      "for r in a b; do gh-axi repo view $r; done | tail -2",
+      "while read r; do gh-axi repo view $r; done < f | head",
+      "until false; do gh-axi pr list; done | head",
+      "if true; then gh-axi pr list; fi | head",
+      "{ gh-axi pr list; } | head",
+      "{ gh-axi pr list; echo; } | head",
+      "(gh-axi pr list) | head",
+      "(gh-axi pr list) |& head",
+      "gh-axi pr list | (head -2)",
+      "cd x && (gh-axi pr list; echo) | tail",
+      "if true; then { gh-axi pr list; }; fi | cut -c1-9",
     ])("denies %s", (cmd) => {
       const { d } = deps();
       const r = decide(cmd, policy, d);
@@ -81,6 +93,12 @@ describe("decide", () => {
       "gh-axi pr list > out.txt; tail out.txt",
       "git log | head -5",
       "gh-axi pr list || tail x",
+      "gh-axi pr list; echo | head",
+      "for r in a b; do gh-axi repo view $r; done; echo | head",
+      "(gh-axi pr list); echo | head",
+      // the pipe applies to echo's output; the axi output only reaches it as an argument
+      "echo $(gh-axi pr list) | head",
+      "$(gh-axi pr list) | head",
     ])("allows %s", (cmd) => {
       const { d } = deps();
       expect(decide(cmd, policy, d).decision).toBe("allow");
@@ -94,6 +112,11 @@ describe("decide", () => {
       const { d } = deps();
       expect(decide("gh-axi pr list | tail -2", { ...policy, truncation: false }, d).decision).toBe("allow");
     });
+  });
+
+  it("does not let an escaped \\> hide a plain gh (#8)", () => {
+    const { d } = deps();
+    expect(decide("echo \\>& gh pr list", policy, d).decision).toBe("deny");
   });
 
   describe("axi you maintain", () => {
