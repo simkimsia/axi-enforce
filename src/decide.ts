@@ -1,4 +1,4 @@
-import { invocations, pipelines } from "./parse.js";
+import { invocations, pipelines, readsOnly } from "./parse.js";
 import { isOwned, type Policy, type Rule } from "./policy.js";
 
 export type IssueState = "open" | "closed" | "missing" | "unknown";
@@ -47,7 +47,8 @@ function truncation(command: string, policy: Policy, deps: Deps): Decision {
   const axis = new Set(policy.rules.map((r) => r.axi));
   const isAxi = (p: string) => axis.has(p) || p.endsWith("-axi");
   for (const line of pipelines(command)) {
-    const at = line.findIndex((inv) => isAxi(inv.program));
+    // an axi inside `$(...)` only reads the pipe; its own output goes to an argument
+    const at = line.findIndex((inv) => isAxi(inv.program) && !readsOnly(line, inv));
     if (at < 0) continue;
     const cut = line.slice(at + 1).find((inv) => TRUNCATORS.has(inv.program));
     if (!cut) continue;

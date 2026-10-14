@@ -85,7 +85,14 @@ export interface Segment {
   group?: number;
   /** an empty marker: the `( )` subshell `ctx` opens here, so a pipe into it can follow in order */
   opens?: boolean;
+  /** ids of the `$(...)` / backtick contexts inside this segment; they ran before it, reading its stdin */
+  subs?: number[];
 }
+
+/** `case WORD in` at command position: the patterns that follow are not commands. */
+const CASE_HEAD = /^\s*(?:(?:!|\{|then|do|else|elif|if|while|until)\s+)*case\s+\S+\s+in$/;
+/** `name` or `function name` right before `()`: a function definition. */
+const FUNC_HEAD = /^\s*(?:function\s+)?([\w.:+@-]+)\s*$/;
 
 /** Split into simple-command segments, following the contexts where code executes. */
 export function segments(cmd: string): string[] {
@@ -127,6 +134,11 @@ export function scan(cmd: string): Segment[] {
   const parents: (number | undefined)[] = [undefined];
   // per buffer: a `( )` subshell that just closed in it, so the next flush carries it even if empty
   const closed: (number | undefined)[] = [undefined];
+  // per buffer: `$(...)` / backtick contexts opened in the current segment
+  const subs: number[][] = [[]];
+  // per buffer: open `case` statements, and whether a pattern (`a|b)`) is being read
+  const cases: number[] = [0];
+  const inPat: boolean[] = [false];
   let nextId = 1;
   const top = () => stack[stack.length - 1];
   const flush = (pipe = false) => {
@@ -137,18 +149,25 @@ export function scan(cmd: string): Segment[] {
       const seg: Segment = { text: s, pipe, ctx: ids[k] };
       if (parents[k] !== undefined) seg.parent = parents[k];
       if (group !== undefined) seg.group = group;
+      if (subs[k].length) seg.subs = subs[k];
       segs.push(seg);
+      if (/^esac\b/.test(s) && cases[k] > 0) cases[k]--;
     }
     bufs[k] = "";
     closed[k] = undefined;
+    subs[k] = [];
   };
   const push = (ctx: string) => {
     const parent = ids[ids.length - 1];
+    if (ctx !== "grp") subs[subs.length - 1].push(nextId);
     stack.push(ctx);
     bufs.push("");
     ids.push(nextId++);
     parents.push(ctx === "grp" ? parent : undefined);
     closed.push(undefined);
+    subs.push([]);
+    cases.push(0);
+    inPat.push(false);
     if (ctx === "grp") segs.push({ text: "", pipe: false, ctx: ids[ids.length - 1], parent, opens: true });
   };
   const pop = () => {
@@ -158,6 +177,9 @@ export function scan(cmd: string): Segment[] {
     const id = ids.pop();
     parents.pop();
     closed.pop();
+    subs.pop();
+    cases.pop();
+    inPat.pop();
     if (kind === "grp") closed[closed.length - 1] = id;
   };
   const add = (c: string) => (bufs[bufs.length - 1] += c);
@@ -213,6 +235,26 @@ export function scan(cmd: string): Segment[] {
       continue;
     }
     // executable context: root, sub, bt
+    const k = bufs.length - 1;
+    if (inPat[k]) {
+      // a case pattern never runs: `a|b)` is one pattern, not a pipe
+      if (/^\s*esac$/.test(bufs[k]) && /[\s;&|)]/.test(c)) inPat[k] = false;
+      else if (c === ")") {
+        bufs[k] = "";
+        inPat[k] = false;
+        continue;
+      } else if (/\s/.test(c) && !bufs[k].trim()) continue;
+      else if (c === "(" || c === "|") {
+        add(c);
+        continue;
+      }
+    }
+    if (/\s/.test(c) && CASE_HEAD.test(bufs[k])) {
+      flush();
+      cases[k]++;
+      inPat[k] = true;
+      continue;
+    }
     if (c === "'") {
       add(c);
       stack.push("sq");
@@ -228,6 +270,14 @@ export function scan(cmd: string): Segment[] {
       continue;
     }
     if (c === "(") {
+      const fn = bufs[k].match(FUNC_HEAD);
+      const close = src.slice(i + 1).match(/^\s*\)/);
+      if (fn && close) {
+        // `f()` and `function f()` both read as `function f`
+        bufs[k] = `function ${fn[1]} `;
+        i += close[0].length;
+        continue;
+      }
       flush();
       push("grp");
       continue;
@@ -248,6 +298,13 @@ export function scan(cmd: string): Segment[] {
       }
       continue;
     }
+    if (c === ";" && cases[k] > 0 && (src[i + 1] === ";" || src[i + 1] === "&")) {
+      // `;;`, `;&`, `;;&` end a case item; a pattern comes next
+      flush();
+      i += src[i + 1] === ";" && src[i + 2] === "&" ? 2 : 1;
+      inPat[k] = true;
+      continue;
+    }
     if (c === ";" || c === "&" || c === "\n") {
       flush();
       continue;
@@ -260,6 +317,9 @@ export function scan(cmd: string): Segment[] {
     ids.pop();
     parents.pop();
     closed.pop();
+    subs.pop();
+    cases.pop();
+    inPat.pop();
   }
   return segs;
 }
@@ -318,7 +378,12 @@ export function words(segment: string): string[] {
 export function resolve(ws: string[]): Invocation | null {
   let i = 0;
   for (;;) {
-    while (i < ws.length && (ASSIGNMENT.test(ws[i]) || RESERVED.has(ws[i]))) i++;
+    while (i < ws.length) {
+      if (ASSIGNMENT.test(ws[i]) || RESERVED.has(ws[i])) i++;
+      else if (ws[i] === "function")
+        i += 2; // `function f { ...`: the body is the command
+      else break;
+    }
     if (i >= ws.length) return null;
     const w = ws[i];
     const name = programName(w);
@@ -371,20 +436,46 @@ export function invocations(cmd: string, depth = 0): Invocation[] {
   return out;
 }
 
-/** Words that open a compound command: `{ ...; }`, `if ...; fi`, loops `...; done`. */
-const OPENERS = new Set(["{", "if", "while", "until", "for", "select"]);
-/** `for x in a b`, `select x in a b`: the rest of the segment is a word list, not a command. */
-const HEADERS = new Set(["for", "select"]);
+/** Words that open a compound command: `{ ...; }`, `if ...; fi`, loops `...; done`, `case ... esac`. */
+const OPENERS = new Set(["{", "if", "while", "until", "for", "select", "case"]);
+/** `for x in a b`, `case x in`: the rest of the segment is a word list, not a command. */
+const HEADERS = new Set(["for", "select", "case"]);
 /** A word that starts a redirection: `>f`, `2>&1`, `&>f`, `<f`. */
 const REDIRECTION = /^(\d+|&)?[<>]/;
 /** Words that close a compound command. A `|` after them pipes the whole group's output. */
-const CLOSERS = new Set(["}", "fi", "done"]);
+const CLOSERS = new Set(["}", "fi", "done", "esac"]);
+
+/** Redirections that send stdout to a file (`> f`, `>> f`, `&> f`, `>&2`), so no pipe gets it. `2>&1` doesn't. */
+function stdoutAway(ws: string[]): boolean {
+  return ws.some((w, i) => {
+    const m = w.match(/^(?:1|&)?>>?(.*)$/);
+    return m !== null && (m[1] || ws[i + 1]) !== "&1";
+  });
+}
 
 interface Frame {
   /** index into the context's members where the group starts */
   start: number;
+  /** index into the context's `all` list where the group starts */
+  allStart: number;
   /** the pipeline piped into the group, if any (`x | while read r; do ...; done`) */
   feed?: Invocation[];
+  /** set when the group is the body of `function <fn>` */
+  fn?: string;
+}
+
+/** A function body: commands whose stdout is the call's stdout, and commands in its `$(...)`. */
+interface Body {
+  writes: Invocation[];
+  reads: Invocation[];
+}
+
+/** Per pipeline: invocations that read its stdin but write elsewhere (`x | echo "$(head)"` -> head). */
+const READ_ONLY = new WeakMap<Invocation[], Set<Invocation>>();
+
+/** Does `inv` only read this pipeline, so its own output never flows down it? */
+export function readsOnly(line: Invocation[], inv: Invocation): boolean {
+  return READ_ONLY.get(line)?.has(inv) ?? false;
 }
 
 /**
@@ -392,29 +483,48 @@ interface Frame {
  * `a | b; c` -> [[a, b], [c]]. Shell -c scripts contribute their own pipelines.
  *
  * A group piped onward counts as one stage holding everything run inside it:
- * `{ a; b; } | c`, `(a; b) | c`, `for ...; do a; done | c` -> [..., [a, b, c]].
- * A pipe into a `( )` subshell continues into its first command: `a | (b)` -> [[a, b]].
- * `$(...)` and backticks feed arguments, not stdin, so they never join the outer pipeline.
+ * `{ a; b; } | c`, `(a; b) | c`, `for ...; do a; done | c`, `case ... esac | c` -> [..., [a, b, c]].
+ * So does a call to a function defined earlier in the command: `f() { a; }; f | c` -> [..., [f, a, c]].
+ * A pipe into a `( )` subshell or a `bash -c` script continues into its first command.
+ * `$(...)` and backticks feed arguments, not stdout, so they never join an outgoing pipe. They do
+ * inherit stdin: `a | echo "$(b)"` -> [[a, echo, b]], with b marked by `readsOnly()`.
  */
 export function pipelines(cmd: string, depth = 0): Invocation[][] {
   return walk(cmd, depth).out;
 }
 
 /** `pipelines()`, plus `top`: the invocations whose stdout is the command's own stdout. */
-function walk(cmd: string, depth: number): { out: Invocation[][]; top: Invocation[] } {
+function walk(cmd: string, depth: number, feed0?: Invocation[]): { out: Invocation[][]; top: Invocation[] } {
   const out: Invocation[][] = [];
   // open pipeline per context: segments of one context arrive in order, inner contexts interleave
   const open = new Map<number, Invocation[]>();
-  // per context: every invocation that runs there, including inside its `( )` subshells
+  if (feed0) open.set(0, feed0);
+  // per context: every invocation whose stdout is that context's stdout, including `( )` subshells
   const members = new Map<number, Invocation[]>();
-  // per context: the `{ }` / `if` / loop groups not yet closed
+  // per context: every invocation run there at all, including inside `$(...)` and backticks
+  const all = new Map<number, Invocation[]>();
+  // per context: the `{ }` / `if` / loop / `case` groups not yet closed
   const frames = new Map<number, Frame[]>();
   // per `( )` subshell: the pipeline piped into it
   const fed = new Map<number, Invocation[]>();
+  // per context: a `function f` waiting for its `{` body
+  const pendingFn = new Map<number, string>();
+  const fns = new Map<string, Body>();
   const listOf = <V>(m: Map<number, V[]>, k: number): V[] => {
     let v = m.get(k);
     if (!v) m.set(k, (v = []));
     return v;
+  };
+  // add a stage's invocations to a pipeline; `reads` only read it
+  const join = (line: Invocation[], writes: Invocation[], reads: Invocation[] = []) => {
+    for (const x of writes) if (!line.includes(x)) line.push(x);
+    for (const x of reads) {
+      if (line.includes(x)) continue;
+      line.push(x);
+      let ro = READ_ONLY.get(line);
+      if (!ro) READ_ONLY.set(line, (ro = new Set()));
+      ro.add(x);
+    }
   };
 
   for (const seg of scan(cmd)) {
@@ -429,62 +539,102 @@ function walk(cmd: string, depth: number): { out: Invocation[][]; top: Invocatio
       continue;
     }
     const mine = listOf(members, seg.ctx);
-    const ws = words(seg.text);
+    const every = listOf(all, seg.ctx);
+    // commands in this segment's `$(...)` / backticks: they read its stdin, their stdout is an argument
+    const reads = (seg.subs ?? []).flatMap((id) => all.get(id) ?? []);
+    every.push(...reads);
+    let ws = words(seg.text);
 
     // a group ends here: everything run inside it is this stage of the pipeline
     let unit: Invocation[] | null = null;
     let feed: Invocation[] | undefined;
+    let away = false;
     const inner = seg.group === undefined ? undefined : members.get(seg.group);
     if (inner?.length) mine.push(...inner);
+    if (seg.group !== undefined) every.push(...(all.get(seg.group) ?? []));
     if (seg.group !== undefined && inner?.length && (!ws.length || REDIRECTION.test(ws[0]))) {
       unit = inner;
       feed = fed.get(seg.group);
+      away = stdoutAway(ws);
     } else if (CLOSERS.has(ws[0] ?? "")) {
       const frame = frames.get(seg.ctx)?.pop();
       unit = frame ? mine.slice(frame.start) : [];
       feed = frame?.feed;
+      away = stdoutAway(ws.slice(1));
+      if (frame?.fn) {
+        // a definition runs nothing; a later call runs the body
+        const writes = unit;
+        fns.set(frame.fn, { writes, reads: every.slice(frame.allStart).filter((x) => !writes.includes(x)) });
+        unit = [];
+        feed = undefined;
+      }
     }
     if (unit) {
-      if (seg.pipe && (feed || unit.length)) {
+      if (seg.pipe && !away && (feed || unit.length)) {
         const line = feed ?? [];
         if (!feed) out.push(line);
-        for (const inv of unit) if (!line.includes(inv)) line.push(inv);
+        join(line, unit);
         open.set(seg.ctx, line);
       } else open.delete(seg.ctx);
       continue;
     }
 
+    if (ws[0] === "function" && ws.length > 1) {
+      pendingFn.set(seg.ctx, ws[1]);
+      ws = ws.slice(2);
+    }
     let header = false;
     for (let i = 0; i < ws.length && (RESERVED.has(ws[i]) || HEADERS.has(ws[i])); i++) {
-      if (OPENERS.has(ws[i])) listOf(frames, seg.ctx).push({ start: mine.length, feed: open.get(seg.ctx) });
+      if (OPENERS.has(ws[i])) {
+        // this segment's own `$(...)` runs inside the group: `{ echo "$(head)"; }`
+        const frame: Frame = { start: mine.length, allStart: every.length - reads.length, feed: open.get(seg.ctx) };
+        const fn = pendingFn.get(seg.ctx);
+        if (fn !== undefined) {
+          frame.fn = fn;
+          frame.feed = undefined;
+          pendingFn.delete(seg.ctx);
+        }
+        listOf(frames, seg.ctx).push(frame);
+      }
       if (HEADERS.has(ws[i])) {
         header = true;
         break;
       }
     }
+    const piped = open.get(seg.ctx);
     const inv = header ? null : resolve(ws);
     if (!inv) {
+      // `x | v=$(head)`: the substitution still reads the pipe
+      if (piped) join(piped, [], reads);
       open.delete(seg.ctx);
       continue;
     }
     mine.push(inv);
-    const piped = open.get(seg.ctx);
+    every.push(inv);
     const line = piped ?? [];
     if (!piped) out.push(line);
     line.push(inv);
+    if (piped) join(line, [], reads);
     if (seg.pipe) open.set(seg.ctx, line);
     else open.delete(seg.ctx);
+    const body = fns.get(inv.program);
+    if (body) {
+      // a call runs the body: `f | head` truncates whatever f prints
+      mine.push(...body.writes);
+      every.push(...body.writes, ...body.reads);
+      if (piped || seg.pipe) join(line, body.writes);
+      if (piped) join(line, [], body.reads);
+    }
     const script = depth < 4 ? shellScript(inv) : null;
     if (script) {
-      const inner = walk(script, depth + 1);
-      // a pipe into the wrapper feeds the script's first top-level pipeline: `gh-axi ... | bash -c 'head'`
-      const first = piped ? inner.out.find((l) => l.some((x) => inner.top.includes(x))) : undefined;
-      if (first) line.push(...first);
-      out.push(...inner.out.filter((l) => l !== first));
+      // a pipe into the wrapper feeds the script's first command: `gh-axi ... | bash -c 'head'`
+      const inner = walk(script, depth + 1, piped ? line : undefined);
+      out.push(...inner.out);
       // the script's output is the wrapper's output: `bash -c 'gh-axi ...' | head` truncates gh-axi.
       // Commands inside its $(...) or backticks only feed arguments, so they stay out.
       mine.push(...inner.top);
-      if (seg.pipe) for (const x of inner.top) if (!line.includes(x)) line.push(x);
+      every.push(...inner.out.flat());
+      if (seg.pipe) join(line, inner.top);
     }
   }
   return { out, top: members.get(0) ?? [] };

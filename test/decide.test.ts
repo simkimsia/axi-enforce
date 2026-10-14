@@ -94,6 +94,20 @@ describe("decide", () => {
       "gh-axi pr list | bash -c 'head -2'",
       'gh-axi pr list | sh -c "tail -1"',
       "N=$(( 1 + 2 )) gh-axi pr list | head",
+      // round 4: $(...) inherits stdin; case; functions (#8)
+      'gh-axi pr list | echo "$(head -2)"',
+      "gh-axi pr list | bash -c 'echo \"$(head -2)\"'",
+      "gh-axi pr list | v=$(head -2)",
+      "case $x in a) gh-axi pr list;; esac | head",
+      "case $x in a|b) echo;; c) gh-axi pr list;; esac | tail",
+      "case $x in (a) gh-axi pr list ;; esac | head",
+      "f() { gh-axi pr list; }; f | head",
+      "function f { gh-axi pr list; }; f | head",
+      "function f() { gh-axi pr list; }; f | tail",
+      'f() { echo "$(head)"; }; gh-axi pr list | f',
+      "{ gh-axi pr list; } 2>&1 | head",
+      "(gh-axi pr list) 2>/dev/null | head",
+      "x=$((gh-axi pr list) | head)",
     ])("denies %s", (cmd) => {
       const { d } = deps();
       const r = decide(cmd, policy, d);
@@ -116,6 +130,13 @@ describe("decide", () => {
       "$(gh-axi pr list) | head",
       "bash -c 'echo $(gh-axi pr list)' | head",
       "bash -c 'echo `gh-axi pr list`' | tail",
+      'x | echo "$(gh-axi pr list)" | head',
+      "case $x in a) gh-axi pr list;; esac; echo | head",
+      "f() { gh-axi pr list; }; echo | head",
+      // a group whose stdout goes to a file feeds nothing down the pipe
+      "(gh-axi pr list) > f | head",
+      "{ gh-axi pr list; } >> f | head",
+      "for r in a; do gh-axi pr list; done &> f | head",
     ])("allows %s", (cmd) => {
       const { d } = deps();
       expect(decide(cmd, policy, d).decision).toBe("allow");
@@ -135,6 +156,14 @@ describe("decide", () => {
     const { d } = deps();
     expect(decide("echo \\>& gh pr list", policy, d).decision).toBe("deny");
   });
+
+  it.each(["f() { gh pr list; }", "case $x in a|b) gh pr list;; esac", "function f { railway up; }; f"])(
+    "finds the plain CLI in a function body or case item: %s",
+    (cmd) => {
+      const { d } = deps();
+      expect(decide(cmd, policy, d).decision).toBe("deny");
+    },
+  );
 
   describe("axi you maintain", () => {
     it("AXI_BYPASS=1 is not enough", () => {

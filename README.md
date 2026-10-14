@@ -52,19 +52,22 @@ axi-enforce:         deny: Don't pipe gh-axi through tail: axi output is already
                      it hides fields ... Rerun without `| tail` and read all of it, or `grep` for the field.
 ```
 
-| Situation                                                                       | What happens                                               |
-| ------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `<axi> ... \| head` / `\| tail` / `\| cut`, anywhere later in the same pipeline | Refused. Read all of it, or `grep` for the field.          |
-| `{ <axi>; } \| head`, also `( )`, loops and `if ... fi`; `<axi> \| (head)`      | Refused, same reason.                                      |
-| `bash -c "<axi>" \| head`, and `<axi> \| bash -c 'head'`                        | Refused, same reason.                                      |
-| `<axi> ... \| grep x`, or output saved to a file                                | Allowed.                                                   |
-| Deliberately wanting part of a long output (e.g. CI logs)                       | Prefix `AXI_TRUNCATE=1`. Allowed and logged as `truncate`. |
-| You don't want this check                                                       | `"truncation": false` in `policy.json`.                    |
+| Situation                                                                                | What happens                                               |
+| ---------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `<axi> ... \| head` / `\| tail` / `\| cut`, anywhere later in the same pipeline          | Refused. Read all of it, or `grep` for the field.          |
+| `{ <axi>; } \| head`, also `( )`, loops, `if ... fi`, `case ... esac`; `<axi> \| (head)` | Refused, same reason.                                      |
+| `f() { <axi>; }; f \| head` (a function defined earlier in the command)                  | Refused, same reason.                                      |
+| `<axi> \| echo "$(head)"`: a `$(...)` reads the stage's stdin                            | Refused, same reason.                                      |
+| `bash -c "<axi>" \| head`, and `<axi> \| bash -c 'head'`                                 | Refused, same reason.                                      |
+| `<axi> ... \| grep x`, output saved to a file, or `( <axi> ) > f \| head`                | Allowed.                                                   |
+| Deliberately wanting part of a long output (e.g. CI logs)                                | Prefix `AXI_TRUNCATE=1`. Allowed and logged as `truncate`. |
+| You don't want this check                                                                | `"truncation": false` in `policy.json`.                    |
 
 An axi is any program named in a rule's `axi`, or any program whose name ends in `-axi`.
 
 `$(<axi> ...) | head` is allowed: the pipe truncates the outer command's output, and the axi
-output only reaches it as an argument.
+output only reaches it as an argument. Redirecting only stderr (`2>&1`, `2>/dev/null`) leaves
+stdout on the pipe, so `{ <axi>; } 2>&1 | head` is refused.
 
 ## Supported agents
 
@@ -152,7 +155,8 @@ A small shell scanner, not a regex over the raw string. It finds the program whe
 would **execute**:
 
 - after `;` `&&` `||` `|` `&`, inside `$(...)`, backticks and `( )`, including `"$(...)"`
-- after shell keywords: `for ...; do gh ...; done`, `if ...; then railway ...; fi`
+- after shell keywords: `for ...; do gh ...; done`, `if ...; then railway ...; fi`,
+  `case $x in a|b) gh ...;; esac`, and in function bodies: `f() { gh ...; }`
 - with redirections such as `2>&1`, `>&2` and `&>file` (not mistaken for `&`), while an escaped
   `\>&` still separates commands
 - behind `VAR=x`, `env`, `sudo`, `command`, `exec`, `time`, `timeout 5`, `xargs`, `nohup`
