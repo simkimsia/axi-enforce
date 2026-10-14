@@ -109,6 +109,8 @@ describe("decide", () => {
       "f() ( echo hi ); for r in a; do gh-axi pr list; done | head",
       "f() ( gh-axi pr list ); f | head",
       "f() { g; }; g() { gh-axi pr list; }; f | head",
+      "f() { h; g; }; h() { x=$(g); }; g() { gh-axi pr list; }; f | head",
+      "f() ( x=$(head -2) ); gh-axi pr list | f",
       "{ gh-axi pr list; } 2>&1 | head",
       "(gh-axi pr list) 2>/dev/null | head",
       "x=$((gh-axi pr list) | head)",

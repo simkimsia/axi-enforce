@@ -511,16 +511,17 @@ function walk(cmd: string, depth: number, feed0?: Invocation[]): { out: Invocati
   const pendingFn = new Map<number, string>();
   const fns = new Map<string, Body>();
   // a call's body, with calls in it to functions known now expanded too: `f() { g; }; g() { a; }; f`
-  const expand = (body: Body, seen: Set<string>): Body => {
+  const expand = (body: Body, path: Set<string>): Body => {
     const writes: Invocation[] = [];
     const reads: Invocation[] = [];
     const visit = (xs: Invocation[], read: boolean) => {
       for (const x of xs) {
         (read ? reads : writes).push(x);
         const b = fns.get(x.program);
-        if (!b || seen.has(x.program)) continue;
-        seen.add(x.program);
-        const e = expand(b, seen);
+        if (!b || path.has(x.program)) continue;
+        path.add(x.program);
+        const e = expand(b, path);
+        path.delete(x.program);
         (read ? reads : writes).push(...e.writes);
         reads.push(...e.reads);
       }
@@ -573,8 +574,8 @@ function walk(cmd: string, depth: number, feed0?: Invocation[]): { out: Invocati
     const inner = seg.group === undefined ? undefined : members.get(seg.group);
     if (inner?.length) mine.push(...inner);
     if (seg.group !== undefined) every.push(...(all.get(seg.group) ?? []));
-    if (seg.group !== undefined && inner?.length && (!ws.length || REDIRECTION.test(ws[0]))) {
-      unit = inner;
+    if (seg.group !== undefined && (inner?.length || fn !== undefined) && (!ws.length || REDIRECTION.test(ws[0]))) {
+      unit = inner ?? [];
       feed = fed.get(seg.group);
       away = stdoutAway(ws);
       if (fn !== undefined) {
