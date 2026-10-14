@@ -56,6 +56,7 @@ axi-enforce:         deny: Don't pipe gh-axi through tail: axi output is already
 | ------------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | `<axi> ... \| head` / `\| tail` / `\| cut`, anywhere later in the same pipeline | Refused. Read all of it, or `grep` for the field.          |
 | `{ <axi>; } \| head`, also `( )`, loops and `if ... fi`; `<axi> \| (head)`      | Refused, same reason.                                      |
+| `bash -c "<axi>" \| head`, and `<axi> \| bash -c 'head'`                        | Refused, same reason.                                      |
 | `<axi> ... \| grep x`, or output saved to a file                                | Allowed.                                                   |
 | Deliberately wanting part of a long output (e.g. CI logs)                       | Prefix `AXI_TRUNCATE=1`. Allowed and logged as `truncate`. |
 | You don't want this check                                                       | `"truncation": false` in `policy.json`.                    |
