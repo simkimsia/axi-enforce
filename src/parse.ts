@@ -511,30 +511,24 @@ function walk(cmd: string, depth: number, feed0?: Invocation[]): { out: Invocati
   const pendingFn = new Map<number, string>();
   const fns = new Map<string, Body>();
   // a call's body, with calls in it to functions known now expanded too: `f() { g; }; g() { a; }; f`
-  // each function is expanded at most once per mode, so fan-out (`f() { g; g; }`) stays linear
-  const expand = (name: string): Body => {
-    const writes = new Set<Invocation>();
-    const reads = new Set<Invocation>();
-    const done = new Set<string>();
-    const visit = (fn: string, read: boolean) => {
-      const body = fns.get(fn);
-      const key = `${read ? "r" : "w"}:${fn}`;
-      if (!body || done.has(key)) return;
-      done.add(key);
-      for (const x of body.writes) {
-        (read ? reads : writes).add(x);
-        visit(x.program, read);
-      }
-      for (const x of body.reads) {
-        reads.add(x);
-        visit(x.program, true);
+  const expand = (body: Body, path: Set<string>): Body => {
+    const writes: Invocation[] = [];
+    const reads: Invocation[] = [];
+    const visit = (xs: Invocation[], read: boolean) => {
+      for (const x of xs) {
+        (read ? reads : writes).push(x);
+        const b = fns.get(x.program);
+        if (!b || path.has(x.program)) continue;
+        path.add(x.program);
+        const e = expand(b, path);
+        path.delete(x.program);
+        (read ? reads : writes).push(...e.writes);
+        reads.push(...e.reads);
       }
     };
-    visit(name, false);
-    return { writes: [...writes], reads: [...reads] };
-  };
-  const append = <T>(to: T[], xs: Iterable<T>) => {
-    for (const x of xs) to.push(x);
+    visit(body.writes, false);
+    visit(body.reads, true);
+    return { writes, reads };
   };
   const listOf = <V>(m: Map<number, V[]>, k: number): V[] => {
     let v = m.get(k);
@@ -570,7 +564,7 @@ function walk(cmd: string, depth: number, feed0?: Invocation[]): { out: Invocati
     const every = listOf(all, seg.ctx);
     // commands in this segment's `$(...)` / backticks: they read its stdin, their stdout is an argument
     const reads = (seg.subs ?? []).flatMap((id) => all.get(id) ?? []);
-    append(every, reads);
+    every.push(...reads);
     let ws = words(seg.text);
 
     // a group ends here: everything run inside it is this stage of the pipeline
@@ -578,8 +572,8 @@ function walk(cmd: string, depth: number, feed0?: Invocation[]): { out: Invocati
     let feed: Invocation[] | undefined;
     let away = false;
     const inner = seg.group === undefined ? undefined : members.get(seg.group);
-    if (inner?.length) append(mine, inner);
-    if (seg.group !== undefined) append(every, all.get(seg.group) ?? []);
+    if (inner?.length) mine.push(...inner);
+    if (seg.group !== undefined) every.push(...(all.get(seg.group) ?? []));
     if (seg.group !== undefined && (inner?.length || fn !== undefined) && (!ws.length || REDIRECTION.test(ws[0]))) {
       unit = inner ?? [];
       feed = fed.get(seg.group);
@@ -652,12 +646,12 @@ function walk(cmd: string, depth: number, feed0?: Invocation[]): { out: Invocati
     if (piped) join(line, [], reads);
     if (seg.pipe) open.set(seg.ctx, line);
     else open.delete(seg.ctx);
-    const body = fns.has(inv.program) ? expand(inv.program) : undefined;
+    const def = fns.get(inv.program);
+    const body = def && expand(def, new Set([inv.program]));
     if (body) {
       // a call runs the body: `f | head` truncates whatever f prints
-      append(mine, body.writes);
-      append(every, body.writes);
-      append(every, body.reads);
+      mine.push(...body.writes);
+      every.push(...body.writes, ...body.reads);
       if (piped || seg.pipe) join(line, body.writes);
       if (piped) join(line, [], body.reads);
     }
@@ -665,11 +659,11 @@ function walk(cmd: string, depth: number, feed0?: Invocation[]): { out: Invocati
     if (script) {
       // a pipe into the wrapper feeds the script's first command: `gh-axi ... | bash -c 'head'`
       const inner = walk(script, depth + 1, piped ? line : undefined);
-      append(out, inner.out);
+      out.push(...inner.out);
       // the script's output is the wrapper's output: `bash -c 'gh-axi ...' | head` truncates gh-axi.
       // Commands inside its $(...) or backticks only feed arguments, so they stay out.
-      append(mine, inner.top);
-      for (const l of inner.out) append(every, l);
+      mine.push(...inner.top);
+      every.push(...inner.out.flat());
       if (seg.pipe) join(line, inner.top);
     }
   }

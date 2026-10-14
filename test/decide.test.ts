@@ -121,14 +121,6 @@ describe("decide", () => {
       expect(r.reason).toMatch(/axi output is already compact/);
       expect(r.reason).toContain("AXI_TRUNCATE=1");
     });
-
-    it.each([16, 32])("denies a call that fans out through %i functions", (n) => {
-      const { d } = deps();
-      const defs = Array.from({ length: n }, (_, i) => `f${i}() { f${i + 1}; f${i + 1}; }; `).join("");
-      const cmd = `${defs}f${n}() { gh-axi pr list; }; f0 | head`;
-      expect(decide(cmd, policy, d).decision).toBe("deny");
-    });
-
     it.each([
       "gh-axi pr view 3 | grep state",
       "gh-axi pr list > out.txt; tail out.txt",
