@@ -3,12 +3,10 @@
   "customContext": {
     "files": [
       {
-        "scope": [],
         "path": "VISION.md",
         "description": "Threat model and failure-mode rules every change is judged against."
       },
       {
-        "scope": [],
         "path": "AGENTS.md",
         "description": "Architecture, the fail-open rule, and the review severity rule for this repo."
       }

@@ -59,7 +59,8 @@ finding (Greptile or any other reviewer) blocks merge only if it is one of:
 2. a crash in the hook path that fails open where the command used to be caught, or
    that fails closed,
 3. a lockout: the hook denies a command it must allow and prints no escape, or
-4. a construct seen in real agent commands.
+4. a construct seen in real agent commands (an agent transcript, a hook log, or an issue
+   that quotes one; a test alone is not evidence).
 
 Any other finding becomes a follow-up issue, and the PR can merge without it. Greptile
 5/5 is not the merge bar for this repo; a P1 outside these four is filed, not fixed.
