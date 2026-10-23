@@ -84,6 +84,7 @@ export function stripHeredocs(cmd: string): string {
 export interface Segment {
   text: string;
   pipe: boolean;
+  conditional?: boolean;
   /** id of the executable context (root, a `$(...)`, a backtick, a `( )`) it was found in */
   ctx: number;
   /** set when `ctx` is a `( )` subshell: the id of the context around it */
@@ -134,6 +135,7 @@ export function scan(cmd: string): Segment[] {
   // one text buffer per executable context; quoted text is appended to the enclosing buffer
   const bufs: string[] = [""];
   const ids: number[] = [0];
+  const conditional = [false];
   // per buffer: the parent id when the context is a `( )` subshell
   const parents: (number | undefined)[] = [undefined];
   // per buffer: a `( )` subshell that just closed in it, so the next flush carries it even if empty
@@ -148,6 +150,7 @@ export function scan(cmd: string): Segment[] {
     const group = closed[k];
     if (s || group !== undefined) {
       const seg: Segment = { text: s, pipe, ctx: ids[k] };
+      if (conditional[k]) seg.conditional = true;
       if (parents[k] !== undefined) seg.parent = parents[k];
       if (group !== undefined) seg.group = group;
       if (opened[k].length) {
@@ -167,16 +170,27 @@ export function scan(cmd: string): Segment[] {
     if (ctx !== "grp") opened[opened.length - 1].push({ id: nextId, at: bufs[bufs.length - 1].length - 1 });
     stack.push(ctx);
     bufs.push("");
+    conditional.push(conditional[conditional.length - 1]);
     ids.push(nextId++);
     parents.push(ctx === "grp" ? parent : undefined);
     closed.push(undefined);
     opened.push([]);
-    if (ctx === "grp") segs.push({ text: "", pipe: false, ctx: ids[ids.length - 1], parent, opens: true });
+    if (ctx === "grp") {
+      segs.push({
+        text: "",
+        pipe: false,
+        ctx: ids[ids.length - 1],
+        parent,
+        opens: true,
+        conditional: conditional[conditional.length - 1],
+      });
+    }
   };
   const pop = () => {
     flush();
     const kind = stack.pop();
     bufs.pop();
+    conditional.pop();
     const id = ids.pop();
     parents.pop();
     closed.pop();
@@ -264,6 +278,7 @@ export function scan(cmd: string): Segment[] {
     if (c === "|") {
       if (src[i + 1] === "|") {
         flush(); // `||`: a new command, not a pipe
+        conditional[conditional.length - 1] = true;
         i++;
       } else {
         flush(true);
@@ -272,7 +287,10 @@ export function scan(cmd: string): Segment[] {
       continue;
     }
     if (c === ";" || c === "&" || c === "\n") {
+      const empty = !bufs[bufs.length - 1].trim() && closed[closed.length - 1] === undefined;
       flush();
+      if (c !== "\n" || !empty) conditional[conditional.length - 1] = c === "&" && src[i + 1] === "&";
+      if (c === "&" && src[i + 1] === "&") i++;
       continue;
     }
     add(c);
@@ -280,6 +298,7 @@ export function scan(cmd: string): Segment[] {
   while (bufs.length) {
     flush();
     bufs.pop();
+    conditional.pop();
     ids.pop();
     parents.pop();
     closed.pop();
@@ -300,12 +319,14 @@ interface Lexed {
   at: number[];
   /** indices of quoted or escaped words that would otherwise read as redirections: `">"`, `\>f` */
   literal: Set<number>;
+  expanded: Map<number, Set<number>>;
 }
 
 function lex(segment: string): Lexed {
   const out: string[] = [];
   const at: number[] = new Array(segment.length).fill(-1);
   const literal = new Set<number>();
+  const expanded = new Map<number, Set<number>>();
   let cur = "";
   let quote: string | null = null;
   let has = false;
@@ -328,6 +349,16 @@ function lex(segment: string): Lexed {
   for (let i = 0; i < segment.length; i++) {
     const c = segment[i];
     at[i] = out.length;
+    if (quote === '"' && c === "\\" && /[$`"\\]/.test(segment[i + 1] ?? "")) {
+      at[i + 1] = out.length;
+      cur += segment[++i];
+      continue;
+    }
+    if (c === "$" && quote !== "'") {
+      let offsets = expanded.get(out.length);
+      if (!offsets) expanded.set(out.length, (offsets = new Set()));
+      offsets.add(cur.length);
+    }
     if (quote) {
       if (c === quote) quote = null;
       else cur += c;
@@ -370,7 +401,7 @@ function lex(segment: string): Lexed {
     has = true;
   }
   end();
-  return { words: out, at, literal };
+  return { words: out, at, literal, expanded };
 }
 
 /** The literal words of `lx` from word `from` on, renumbered from 0; undefined when none. */
@@ -455,11 +486,11 @@ function skipFlags(ws: string[], i: number, argFlags: string[]): number {
 const SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh", "fish"]);
 
 /** `bash -lc "<script>"` → the script; otherwise null. */
-function shellScript(inv: Invocation): string | null {
+function shellScriptIndex(inv: Invocation): number | null {
   if (!SHELLS.has(inv.program)) return null;
   for (let i = 0; i < inv.args.length; i++) {
     const a = inv.args[i];
-    if (/^-[a-z]*c[a-z]*$/i.test(a)) return inv.args[i + 1] ?? null;
+    if (/^-[a-z]*c[a-z]*$/i.test(a)) return i + 1 < inv.args.length ? i + 1 : null;
     if (!a.startsWith("-")) return null;
   }
   return null;
@@ -510,8 +541,19 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
     // `$(command -v gh) pr list`, `W=$(command -v gh); $W pr list`: runs what the lookup found
     const ran = inv.program === "_" ? looked : (vars.get(inv.program.match(VAR_WORD)?.[1] ?? "") ?? []);
     for (const name of ran) out.push({ program: programName(name), args: inv.args });
-    const script = depth < 4 ? shellScript(inv) : null;
-    if (script) out.push(...invocations(script, depth + 1, local));
+    const scriptIndex = depth < 4 ? shellScriptIndex(inv) : null;
+    if (scriptIndex !== null) {
+      const offsets = lx.expanded.get(ws.length - inv.args.length + scriptIndex);
+      const script = inv.args[scriptIndex].replace(
+        /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g,
+        (ref, braced, bare, offset) => {
+          const name = braced ?? bare;
+          if (!offsets?.has(offset) || vars.get(name) === local.get(name)) return ref;
+          return vars.get(name)?.join(" ") || "_";
+        },
+      );
+      out.push(...invocations(script, depth + 1, local));
+    }
   }
   return out;
 }
@@ -528,6 +570,7 @@ const CLOSERS = new Set(["}", "fi", "done"]);
 interface Frame {
   /** index into the context's members where the group starts */
   start: number;
+  conditional: boolean;
   /** the pipeline piped into the group, if any (`x | while read r; do ...; done`) */
   feed?: Invocation[];
 }
@@ -560,6 +603,7 @@ export interface Capture {
   seq: number;
   /** a file written with `>>`: it keeps what was in the file before (#22) */
   append?: boolean;
+  conditional?: boolean;
 }
 
 /** `pipelines()` plus the data flow outside pipes: what was saved, and the run order of each invocation. */
@@ -635,17 +679,24 @@ export function samePath(p: string): string {
 }
 
 /** Record the files that `ws` redirects stdout into, as saved output of `from`. */
-function captureFiles(st: FlowState, ws: string[], literal: ReadonlySet<number> | undefined, from: Invocation[]): void {
+function captureFiles(
+  st: FlowState,
+  ws: string[],
+  literal: ReadonlySet<number> | undefined,
+  from: Invocation[],
+  conditional: boolean,
+): void {
   for (const { target, append } of splitRedirects(ws, literal).writes) {
     if (target.startsWith("/dev/")) continue;
     const c: Capture = { kind: "file", name: samePath(target), from, seq: st.order.size };
     if (append) c.append = true;
+    if (conditional) c.conditional = true;
     st.captures.push(c);
   }
 }
 
 /** `pipelines()`, plus `top`: the invocations whose stdout is the command's own stdout. */
-function walk(cmd: string, depth: number, st: FlowState): { out: Invocation[][]; top: Invocation[] } {
+function walk(cmd: string, depth: number, st: FlowState, conditional = false): { out: Invocation[][]; top: Invocation[] } {
   const out: Invocation[][] = [];
   // open pipeline per context: segments of one context arrive in order, inner contexts interleave
   const open = new Map<number, Invocation[]>();
@@ -656,6 +707,7 @@ function walk(cmd: string, depth: number, st: FlowState): { out: Invocation[][];
   const frames = new Map<number, Frame[]>();
   // per `( )` subshell: the pipeline piped into it
   const fed = new Map<number, Invocation[]>();
+  const optional = new Set<number>();
   const listOf = <V>(m: Map<number, V[]>, k: number): V[] => {
     let v = m.get(k);
     if (!v) m.set(k, (v = []));
@@ -663,7 +715,13 @@ function walk(cmd: string, depth: number, st: FlowState): { out: Invocation[][];
   };
 
   for (const seg of scan(cmd)) {
+    const guarded =
+      conditional ||
+      !!seg.conditional ||
+      optional.has(seg.ctx) ||
+      [...frames.values()].some((stack) => stack.some((frame) => frame.conditional));
     if (seg.opens) {
+      if (guarded) optional.add(seg.ctx);
       // a pipe into `( )` continues into the subshell, and on into a nested one: `a | ((b))`
       const feed = seg.parent === undefined ? undefined : open.get(seg.parent);
       if (feed && seg.parent !== undefined) {
@@ -694,6 +752,9 @@ function walk(cmd: string, depth: number, st: FlowState): { out: Invocation[][];
       feed = frame?.feed;
     }
     if (unit) {
+      if (unit.some((inv, i) => i > 0 && st.pipes.get(inv) !== unit![i - 1])) {
+        st.pipes.delete(unit[0]);
+      }
       tails.delete(seg.ctx);
       if (seg.pipe && (feed || unit.length)) {
         const line = feed ?? [];
@@ -704,19 +765,26 @@ function walk(cmd: string, depth: number, st: FlowState): { out: Invocation[][];
       // `{ a; } > f`, `(a) > f`, `done > f`: everything the group printed lands in f
       if (unit.length) {
         const skip = CLOSERS.has(ws[0] ?? "") ? 1 : 0;
-        captureFiles(st, ws.slice(skip), literalFrom(lx, skip), [...(feed ?? []), ...unit]);
+        captureFiles(st, ws.slice(skip), literalFrom(lx, skip), [...(feed ?? []), ...unit], guarded);
       }
       continue;
     }
 
     let header = false;
     for (let i = 0; i < ws.length && (RESERVED.has(ws[i]) || HEADERS.has(ws[i])); i++) {
-      if (OPENERS.has(ws[i])) listOf(frames, seg.ctx).push({ start: mine.length, feed: open.get(seg.ctx) });
+      if (OPENERS.has(ws[i])) {
+        listOf(frames, seg.ctx).push({
+          start: mine.length,
+          feed: open.get(seg.ctx),
+          conditional: guarded || ws[i] !== "{",
+        });
+      }
       if (HEADERS.has(ws[i])) {
         header = true;
         break;
       }
     }
+    const invocationConditional = guarded || (frames.get(seg.ctx)?.some((frame) => frame.conditional) ?? false);
     const inv = header ? null : resolveLexed(lx);
     // `out=$(a)` / `local out=$(a)`: out holds what ran in its own `$(...)`, so `d=$(date) out=$(a)` only marks out
     for (const [name, ids] of header ? [] : assignments(seg, lx, assignFrom(ws, inv))) {
@@ -738,15 +806,18 @@ function walk(cmd: string, depth: number, st: FlowState): { out: Invocation[][];
     line.push(inv);
     if (seg.pipe) open.set(seg.ctx, line);
     else open.delete(seg.ctx);
-    const script = depth < 4 ? shellScript(inv) : null;
+    const scriptIndex = depth < 4 ? shellScriptIndex(inv) : null;
+    const script = scriptIndex === null ? null : inv.args[scriptIndex];
     let printed: Invocation[] = [];
     if (script) {
       tails.delete(seg.ctx);
-      const inner = walk(script, depth + 1, st);
+      const inner = walk(script, depth + 1, st, invocationConditional);
       // a pipe into the wrapper feeds the script's first top-level pipeline: `gh-axi ... | bash -c 'head'`
       const first = piped ? inner.out.find((l) => l.some((x) => inner.top.includes(x))) : undefined;
       if (first) {
-        if (first.length) st.pipes.set(first[0], inv);
+        if (first.length && inner.top.every((x, i) => i === 0 || st.pipes.get(x) === inner.top[i - 1])) {
+          st.pipes.set(first[0], inv);
+        }
         line.push(...first);
       }
       out.push(...inner.out.filter((l) => l !== first));
@@ -756,7 +827,7 @@ function walk(cmd: string, depth: number, st: FlowState): { out: Invocation[][];
       if (seg.pipe) for (const x of inner.top) if (!line.includes(x)) line.push(x);
       printed = inner.top.filter((x) => !line.includes(x));
     }
-    captureFiles(st, inv.args, inv.literal, [...line, ...printed]);
+    captureFiles(st, inv.args, inv.literal, [...line, ...printed], invocationConditional);
   }
   return { out, top: members.get(0) ?? [] };
 }

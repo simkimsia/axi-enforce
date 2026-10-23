@@ -123,7 +123,7 @@ function truncation(command: string, policy: Policy, deps: Deps): Decision {
       n.truncates = false;
     }
     until.set(c, n.first);
-    if (!c.append) n.truncates = true;
+    if (!c.append && !c.conditional) n.truncates = true;
   }
   // built once per capture and per invocation, not per pair (#22)
   const refs = new Map<Capture, RegExp>();
