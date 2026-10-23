@@ -30,6 +30,11 @@ const LAUNCHERS: Record<string, string[]> = {
   bunx: ["-p", "--package"],
   uvx: ["--from", "--with"],
 };
+/**
+ * `command -v gh` / `command -V gh` only look the name up and print where it is (#23); plain
+ * `command gh` and `command -p gh` run it. Flags may be combined: `command -pv gh`.
+ */
+const LOOKUP_FLAG = /^-[pvV]*[vV][pvV]*$/;
 /** Launchers that take positional arguments before the program: `timeout 5 gh`. */
 const LAUNCHER_POSITIONALS: Record<string, number> = { timeout: 1 };
 /** Two-word launchers: `pnpm dlx gh`, `npm exec gh`, ... */
@@ -339,12 +344,19 @@ export function resolve(ws: string[]): Invocation | null {
       continue;
     }
     const argFlags = LAUNCHERS[name];
+    if (name === "command" && lookupOnly(ws, i + 1)) return { program: name, args: ws.slice(i + 1) };
     if (argFlags) {
       i = skipFlags(ws, i + 1, argFlags) + (LAUNCHER_POSITIONALS[name] ?? 0);
       continue;
     }
     return { program: name, args: ws.slice(i + 1) };
   }
+}
+
+/** `command`'s flags from `i` include a lookup (`-v`, `-V`): the next word is an argument, not run. */
+function lookupOnly(ws: string[], i: number): boolean {
+  for (; i < ws.length && ws[i].startsWith("-") && ws[i] !== "--"; i++) if (LOOKUP_FLAG.test(ws[i])) return true;
+  return false;
 }
 
 function skipFlags(ws: string[], i: number, argFlags: string[]): number {

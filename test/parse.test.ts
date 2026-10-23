@@ -43,6 +43,22 @@ describe("invocations: catches the CLI wherever it executes", () => {
     ["x=$((gh pr list) | wc -l); echo $x", ["echo", "gh", "wc"]],
     ["echo \\\\>& gh pr list", ["echo"]],
     ["f() { gh pr list; }", ["f", "gh", "}"]],
+    // #23: launchers still run the program; only a lookup (`command -v`) does not
+    ["wrangler deploy", ["wrangler"]],
+    ["echo $(wrangler whoami)", ["echo", "wrangler"]],
+    ["pnpm exec wrangler deploy", ["wrangler"]],
+    ["bunx wrangler deploy", ["wrangler"]],
+    ["env FOO=1 wrangler deploy", ["wrangler"]],
+    ["command wrangler deploy", ["wrangler"]],
+    ["command -p wrangler deploy", ["wrangler"]],
+    ["builtin command wrangler deploy", ["wrangler"]],
+    ["exec wrangler deploy", ["wrangler"]],
+    ["/opt/homebrew/bin/wrangler deploy", ["wrangler"]],
+    ["$HOME/Library/pnpm/wrangler deploy", ["wrangler"]],
+    ["xargs wrangler kv key get", ["wrangler"]],
+    ["time wrangler deploy", ["wrangler"]],
+    ["nice -n 5 wrangler deploy", ["wrangler"]],
+    ["command -v wrangler && wrangler deploy", ["command", "wrangler"]],
   ])("%s", (cmd, want) => {
     expect(programs(cmd)).toEqual([...want].sort());
   });
@@ -54,7 +70,27 @@ describe("invocations: ignores text that never executes", () => {
     ["grep gh file.txt", ["grep"]],
     ["echo 'gh api user; railway up'", ["echo"]],
     ['git commit -m "use gh; then railway"', ["git"]],
-    ["command -v gh-axi", ["gh-axi"]],
+    // #23: a lookup or a path that only names the CLI never runs it
+    ["command -v gh-axi", ["command"]],
+    ["command -v wrangler", ["command"]],
+    ["command -V railway", ["command"]],
+    ["command -pv gh", ["command"]],
+    ["builtin command -v gh", ["command"]],
+    ["command -v mise asdf brew", ["command"]],
+    ["which gh", ["which"]],
+    ["type railway", ["type"]],
+    ["type -a netlify", ["type"]],
+    ["whereis supabase", ["whereis"]],
+    ["hash wrangler", ["hash"]],
+    ["REAL=$(command -v gh); echo $REAL", ["command", "echo"]],
+    [
+      "W=$(dirname $(readlink -f $(command -v wrangler))); ls $W/../wrangler-dist",
+      ["command", "dirname", "ls", "readlink"],
+    ],
+    ["WR=$(dirname $(readlink -f $(which wrangler)))/..; ls $WR", ["dirname", "ls", "readlink", "which"]],
+    ["ls -d $(pnpm root -g)/wrangler/wrangler-dist", ["ls", "pnpm"]],
+    ["grep -n workers ~/Library/pnpm/global/5/node_modules/wrangler/wrangler-dist/cli.js", ["grep"]],
+    ["cat ~/Projects/haze/wrangler.toml", ["cat"]],
     ["cat <<'EOF' > notes.md\ngh api user\nrailway up\nEOF\nls", ["cat", "ls"]],
     ["git commit -F - <<EOF\nfix: gh pr list broke\nEOF", ["git"]],
     ["cat <<< 'gh api'", ["cat"]],
@@ -73,6 +109,12 @@ describe("shell -c scripts are parsed too", () => {
   it.each([
     ['bash -lc "gh issue list"', ["bash", "gh"]],
     ["sh -c 'cd x && railway up'", ["sh", "cd", "railway"]],
+    ["sh -c 'wrangler deploy'", ["sh", "wrangler"]],
+    // #23, seen in the gap log: the script only reads wrangler's installed files
+    [
+      "sh -c 'WR=$(dirname $(readlink -f $(command -v wrangler))); F=$WR/../wrangler-dist/cli.js; ls $F; grep -n \"entry-point file at\" $F'",
+      ["sh", "command", "dirname", "readlink", "ls", "grep"],
+    ],
     ['zsh -c "echo \\"$(gh api user)\\""', ["zsh", "echo", "gh"]],
   ])("%s", (cmd, want) => {
     expect(programs(cmd)).toEqual([...want].sort());

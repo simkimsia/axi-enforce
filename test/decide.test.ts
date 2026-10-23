@@ -40,6 +40,25 @@ describe("decide", () => {
     expect(decide("x=$((gh pr list) | wc -l)", policy, d).decision).toBe("deny");
   });
 
+  // #23: looking the CLI up or reading its files is not running it, so no AXI_GAP is needed
+  it.each([
+    "W=$(dirname $(readlink -f $(command -v railway))); ls $W/../dist",
+    "REAL=$(command -v gh); echo $REAL",
+    "which gh; type railway; whereis gh; hash railway",
+    "grep -n deploy ~/node_modules/railway/dist/cli.js",
+  ])("allows a lookup that never runs the CLI: %s", (cmd) => {
+    const { d } = deps();
+    expect(decide(cmd, policy, d).decision).toBe("allow");
+  });
+
+  it.each(["command railway up", "command -p gh pr list", "command -v gh && gh pr list"])(
+    "still denies `command` that runs the CLI: %s",
+    (cmd) => {
+      const { d } = deps();
+      expect(decide(cmd, policy, d).decision).toBe("deny");
+    },
+  );
+
   it("stays out of the way when the axi is not installed", () => {
     const { d } = deps();
     expect(decide("fly deploy", policy, d).decision).toBe("allow");
