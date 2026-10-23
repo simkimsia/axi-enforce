@@ -524,6 +524,7 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
     return vars;
   };
   const deferred = DEFERRED.some((re) => re.test(cmd));
+  const dropped = new Set<string>();
   const lookedIn = (ids: number[]) => ids.flatMap((id) => found.get(id) ?? []);
   const record = (bindings: Map<string, string[]>, name: string, looked: string[]) => {
     if (looked.length) bindings.set(name, looked);
@@ -569,7 +570,11 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
       }
     }
     if (inv?.program === "unset" && !inv.args.some((arg) => /^-[A-Za-z]*f/.test(arg))) {
-      for (const arg of inv.args) if (!arg.startsWith("-")) exported.delete(arg);
+      for (const arg of inv.args) {
+        if (arg.startsWith("-")) continue;
+        exported.delete(arg);
+        dropped.add(arg);
+      }
     }
     // `W=... sh -c '...'`: a prefix assignment is in that command's environment
     const prefixed = new Set<string>();
@@ -577,8 +582,10 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
       const index = ws.findIndex((w) => w.startsWith(`${name}=`));
       const value = ws[index].slice(name.length + 1);
       const looked = [...lookedIn(ids), ...references(value, index, name.length + 1)];
-      if (index >= from) record(vars, name, looked);
-      else if (index < ws.length - (inv?.args.length ?? 0) - 1) {
+      if (index >= from) {
+        record(vars, name, looked);
+        dropped.delete(name);
+      } else if (index < ws.length - (inv?.args.length ?? 0) - 1) {
         record(local, name, looked);
         prefixed.add(name);
       }
@@ -588,6 +595,7 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
     const looked = lookedIn(seg.subs ?? []);
     // `for c in $(command -v gh); do $c ...`: the loop variable holds it too (#26)
     if (HEADERS.has(inv.program) && inv.args[1] === "in" && ASSIGNMENT.test(`${inv.args[0]}=`)) {
+      dropped.delete(inv.args[0]);
       record(vars, inv.args[0], [
         ...looked,
         ...inv.args.slice(2).flatMap((value, i) => references(value, ws.length - inv.args.length + 2 + i)),
@@ -610,8 +618,9 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
         (ref, braced, bare, offset) => {
           const name = braced ?? bare;
           // the caller already expanded a double-quoted `$W`; a single-quoted one is the child's to expand
-          if (!offsets?.has(offset) || vars.get(name) === env.get(name)) return ref;
-          return vars.get(name)?.join(" ") || "_";
+          const value = dropped.has(name) ? undefined : vars.get(name);
+          if (!offsets?.has(offset) || value === env.get(name)) return ref;
+          return value?.join(" ") || "_";
         },
       );
       out.push(...invocations(script, depth + 1, env));
