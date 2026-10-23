@@ -523,6 +523,7 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
     }
     return vars;
   };
+  const deferred = DEFERRED.some((re) => re.test(cmd));
   const lookedIn = (ids: number[]) => ids.flatMap((id) => found.get(id) ?? []);
   const record = (bindings: Map<string, string[]>, name: string, looked: string[]) => {
     if (looked.length) bindings.set(name, looked);
@@ -561,10 +562,17 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
         for (const arg of inv.args.slice(i)) {
           const name = arg.match(/^([A-Za-z_][A-Za-z0-9_]*)(=|$)/)?.[1];
           if (name) {
-            if (exporting) exported.add(name);
-            else exported.delete(name);
+            if (!exporting) exported.delete(name);
+            else if (!deferred) exported.add(name);
           }
         }
+      }
+    }
+    if (inv?.program === "unset" && !inv.args.some((arg) => /^-[A-Za-z]*f/.test(arg))) {
+      for (const arg of inv.args) {
+        if (arg.startsWith("-")) continue;
+        vars.delete(arg);
+        exported.delete(arg);
       }
     }
     // `W=... sh -c '...'`: a prefix assignment is in that command's environment

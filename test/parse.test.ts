@@ -144,6 +144,14 @@ describe("invocations: ignores text that never executes", () => {
         ],
       ],
     ),
+    ...["unset", "unset -v"].map((remove) => [
+      `export W=$(command -v gh); ${remove} W; bash -c '$W pr list'`,
+      ["export", "command", "unset", "bash", "$W"],
+    ]),
+    [
+      "W=$(command -v gh); fn() { export W; }; bash -c '$W pr list'",
+      ["command", "fn", "export", "}", "bash", "$W"],
+    ],
     ...["'$W'", "'${W}'", "\\$W", '"\\$W"'].flatMap((value) => [
       [`W=$(command -v gh); ${value} pr list`, ["command", value.includes("{") ? "${W}" : "$W"]],
       ...["", "export ", "local ", "declare ", "typeset ", "readonly "].map((declaration) => [
