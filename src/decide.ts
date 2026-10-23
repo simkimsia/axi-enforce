@@ -86,7 +86,9 @@ function truncation(command: string, policy: Policy, deps: Deps): Decision {
     let last = line.length - 1;
     while (last >= 0 && !TRUNCATORS.has(line[last].program)) last--;
     for (let i = 0; !found && i <= last; i++) {
-      const via = saved.find((c) => (order.get(line[i]) ?? -1) >= c.seq && feeds(line[i], c, i === last));
+      const via = saved.find(
+        (c) => (order.get(line[i]) ?? -1) >= c.seq && feeds(line[i], c, TRUNCATORS.has(line[i].program)),
+      );
       const axi = via?.from.find((inv) => isAxi(inv.program));
       if (via && axi) found = { axi: axi.program, cut: line[last].program, via };
     }

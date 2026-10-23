@@ -142,6 +142,9 @@ describe("decide", () => {
       ["bash -lc 'gh-axi pr list > f; tail f'", "f", "tail"],
       ["gh-axi pr list > f; bash -c 'head f'", "f", "head"],
       ["railway-axi status > f; tail f", "f", "tail"],
+      ["gh-axi pr list > f; head -50 f | tail -10", "f", "tail"],
+      ['out=$(gh-axi pr list); head -50 <<< "$out" | tail -5', "$out", "tail"],
+      ["bash -c 'gh-axi pr list' > f; tail f", "f", "tail"],
     ])("denies saved output: %s", (cmd, where, cut) => {
       const { d } = deps();
       const r = decide(cmd, policy, d);

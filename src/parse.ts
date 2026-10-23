@@ -576,8 +576,8 @@ function walk(cmd: string, depth: number, st: FlowState): { out: Invocation[][];
     line.push(inv);
     if (seg.pipe) open.set(seg.ctx, line);
     else open.delete(seg.ctx);
-    captureFiles(st, inv.args, [...line]);
     const script = depth < 4 ? shellScript(inv) : null;
+    let printed: Invocation[] = [];
     if (script) {
       const inner = walk(script, depth + 1, st);
       // a pipe into the wrapper feeds the script's first top-level pipeline: `gh-axi ... | bash -c 'head'`
@@ -588,7 +588,9 @@ function walk(cmd: string, depth: number, st: FlowState): { out: Invocation[][];
       // Commands inside its $(...) or backticks only feed arguments, so they stay out.
       mine.push(...inner.top);
       if (seg.pipe) for (const x of inner.top) if (!line.includes(x)) line.push(x);
+      printed = inner.top.filter((x) => !line.includes(x));
     }
+    captureFiles(st, inv.args, [...line, ...printed]);
   }
   return { out, top: members.get(0) ?? [] };
 }
