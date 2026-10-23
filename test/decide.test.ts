@@ -57,13 +57,10 @@ describe("decide", () => {
     "command -v gh && gh pr list",
     "$(command -v gh) pr list",
     "R=$(command -v railway); $R up",
-  ])(
-    "still denies `command` that runs the CLI: %s",
-    (cmd) => {
-      const { d } = deps();
-      expect(decide(cmd, policy, d).decision).toBe("deny");
-    },
-  );
+  ])("still denies `command` that runs the CLI: %s", (cmd) => {
+    const { d } = deps();
+    expect(decide(cmd, policy, d).decision).toBe("deny");
+  });
 
   it("stays out of the way when the axi is not installed", () => {
     const { d } = deps();
