@@ -46,6 +46,8 @@ describe("decide", () => {
     "REAL=$(command -v gh); echo $REAL",
     "which gh; type railway; whereis gh; hash railway",
     "grep -n deploy ~/node_modules/railway/dist/cli.js",
+    // #26: an unexported variable is empty in a child shell, so `$W` there runs nothing
+    "W=$(command -v gh); bash -c '$W pr list'",
   ])("allows a lookup that never runs the CLI: %s", (cmd) => {
     const { d } = deps();
     expect(decide(cmd, policy, d).decision).toBe("allow");
@@ -62,6 +64,9 @@ describe("decide", () => {
     "export W=$(command -v railway); $W up",
     'W=$(command -v railway); sh -c "$W up"',
     "for c in $(command -v railway); do $c up; done",
+    "export W=$(command -v gh); bash -c '$W pr list'",
+    "W=$(command -v gh); export W; bash -c '$W pr list'",
+    "W=$(command -v gh) bash -c '$W pr list'",
   ])("still denies `command` that runs the CLI: %s", (cmd) => {
     const { d } = deps();
     expect(decide(cmd, policy, d).decision).toBe("deny");
@@ -199,6 +204,11 @@ describe("decide", () => {
       ["gh-axi pr list > f; cat f | (wc -l other; cat) | head", "f", "head"],
       ["gh-axi pr list > f; cat f | { wc -l other; cat; } | head", "f", "head"],
       ["gh-axi pr list > f; test -e cache && cat cache > f; head f", "f", "head"],
+      // a writer in a case arm or a function body may never run, so it does not replace f
+      ["gh-axi pr list > f; case $x in a) cat c > f;; esac; head f", "f", "head"],
+      ["gh-axi pr list > f; fn() { cat c > f; }; head f", "f", "head"],
+      ["gh-axi pr list > f; function fn { cat c > f; }; head f", "f", "head"],
+      ["gh-axi pr list > f; fn() ( cat c > f ); head f", "f", "head"],
       ["gh-axi pr list > f; test -e cache || cat cache > f; head f", "f", "head"],
       ["gh-axi pr list > f; if test -e cache; then cat cache > f; fi; head f", "f", "head"],
       ["gh-axi pr list > f; for x in $EMPTY; do echo x > f; done; head f", "f", "head"],

@@ -69,7 +69,9 @@ describe("invocations: catches the CLI wherever it executes", () => {
     ["local W=$(command -v wrangler); $W deploy", ["local", "command", "$W", "wrangler"]],
     ["export W=$(command -v wrangler); $W deploy", ["export", "command", "$W", "wrangler"]],
     ["declare -x W=$(command -v wrangler); $W deploy", ["declare", "command", "$W", "wrangler"]],
-    ['W=$(command -v wrangler); sh -c "$W deploy"', ["command", "sh", "$W", "wrangler"]],
+    // the caller expands a double-quoted `$W`, so the script runs wrangler itself
+    ['W=$(command -v wrangler); sh -c "$W deploy"', ["command", "sh", "wrangler"]],
+    ["export W=$(command -v wrangler); sh -c '$W deploy'", ["export", "command", "sh", "$W", "wrangler"]],
     ["for c in $(command -v wrangler); do $c deploy; done", ["for", "command", "$c", "wrangler", "done"]],
     ['W=$(command -v gh); export W="$W"; $W pr list', ["command", "export", "$W", "gh"]],
     ['W=$(command -v gh); local C="${W}"; $C pr list', ["command", "local", "$C", "gh"]],

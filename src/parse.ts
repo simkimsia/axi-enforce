@@ -505,6 +505,8 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
   // A `sh -c` script starts from the variables its caller set (#26).
   const found = new Map<number, string[]>();
   const vars = new Map<string, string[]>(outer);
+  // what a child shell sees: its caller's environment, so only exported variables (#26)
+  const exported = new Set<string>(outer?.keys());
   const lookedIn = (ids: number[]) => ids.flatMap((id) => found.get(id) ?? []);
   const record = (bindings: Map<string, string[]>, name: string, looked: string[]) => {
     if (looked.length) bindings.set(name, looked);
@@ -519,12 +521,22 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
     const references = (value: string) => vars.get(value.match(VAR_WORD)?.[1] ?? "") ?? [];
     const local = new Map(vars);
     const from = assignFrom(ws, inv);
+    // `export W=...`, `declare -x W=...`, bare `export W`: W reaches child shells
+    const exporting =
+      inv?.program === "export" ||
+      ((inv?.program === "declare" || inv?.program === "typeset") && inv.args.some((a) => /^-[A-Za-z]*x/.test(a)));
+    if (exporting) for (const a of inv.args) if (/^[A-Za-z_][A-Za-z0-9_]*(=|$)/.test(a)) exported.add(a.split("=")[0]);
+    // `W=... sh -c '...'`: a prefix assignment is in that command's environment
+    const prefixed = new Set<string>();
     for (const [name, ids] of assignments(seg, lx, 0)) {
       const index = ws.findIndex((w) => w.startsWith(`${name}=`));
       const value = ws[index].slice(name.length + 1);
       const looked = [...lookedIn(ids), ...references(value)];
       if (index >= from) record(vars, name, looked);
-      else if (index < ws.length - (inv?.args.length ?? 0) - 1) record(local, name, looked);
+      else if (index < ws.length - (inv?.args.length ?? 0) - 1) {
+        record(local, name, looked);
+        prefixed.add(name);
+      }
     }
     if (!inv) continue;
     out.push(inv);
@@ -543,16 +555,18 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
     for (const name of ran) out.push({ program: programName(name), args: inv.args });
     const scriptIndex = depth < 4 ? shellScriptIndex(inv) : null;
     if (scriptIndex !== null) {
+      const env = new Map([...local].filter(([name]) => exported.has(name) || prefixed.has(name)));
       const offsets = lx.expanded.get(ws.length - inv.args.length + scriptIndex);
       const script = inv.args[scriptIndex].replace(
         /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g,
         (ref, braced, bare, offset) => {
           const name = braced ?? bare;
-          if (!offsets?.has(offset) || vars.get(name) === local.get(name)) return ref;
+          // the caller already expanded a double-quoted `$W`; a single-quoted one is the child's to expand
+          if (!offsets?.has(offset) || vars.get(name) === env.get(name)) return ref;
           return vars.get(name)?.join(" ") || "_";
         },
       );
-      out.push(...invocations(script, depth + 1, local));
+      out.push(...invocations(script, depth + 1, env));
     }
   }
   return out;
@@ -618,8 +632,14 @@ export interface Flow {
 export function flow(cmd: string): Flow {
   const st: FlowState = { order: new Map(), captures: [], pipes: new Map() };
   const { out } = walk(cmd, 0, st);
+  // A `case` arm or a function body may never run, and the scanner does not track either, so no
+  // writer in such a command is trusted to replace a saved file (#22): fall back to main's behaviour.
+  if (DEFERRED.some((re) => re.test(cmd))) for (const c of st.captures) if (c.kind === "file") c.conditional = true;
   return { lines: out, captures: st.captures, order: st.order, pipes: st.pipes };
 }
+
+/** `case ... esac`, `function name`, `name()`: code that runs only on a match or a later call. */
+const DEFERRED = [/(^|[\s;&|(`])esac(?![\w-])/, /(^|[\s;&|(`{])function\s+[A-Za-z_]/, /[A-Za-z_][\w.:-]*\s*\(\s*\)/];
 
 interface FlowState {
   order: Map<Invocation, number>;
