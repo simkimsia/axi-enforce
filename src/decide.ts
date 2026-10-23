@@ -38,15 +38,28 @@ const READERS = new Set(["cat", "grep", "sed", "awk", "jq", "sort", "uniq", "nl"
  * `< f`, `<<< "$out"` or a file argument (`head f`); an earlier stage prints it (`echo "$out"`,
  * `cat f`). A variable used as an argument (`git show $sha | head`) is not its output, so it is not counted.
  */
-function feeds(inv: Invocation, c: Capture, truncator: boolean): boolean {
-  const { plain, inputs } = redirects(inv.args);
+function feeds(inv: Invocation, words: Redirects, c: Capture, ref: RegExp | undefined, truncator: boolean): boolean {
+  const { plain, inputs } = words;
   if (c.kind === "file") {
     if (!truncator && !READERS.has(inv.program)) return false;
     return [...plain, ...inputs].some((w) => samePath(w) === c.name);
   }
   const ws = truncator ? inputs : PRINTERS.has(inv.program) ? [...plain, ...inputs] : [];
-  const ref = new RegExp(`\\$\\{?${c.name}(?![A-Za-z0-9_])`);
-  return ws.some((w) => ref.test(w));
+  return ref !== undefined && ws.some((w) => ref.test(w));
+}
+
+type Redirects = ReturnType<typeof redirects>;
+
+/** `grep -c x f`, `wc -l`: prints a count or file names, not the saved output (#22). */
+function summarizes(inv: Invocation): boolean {
+  if (inv.program === "wc") return true;
+  if (inv.program !== "grep") return false;
+  for (const a of inv.args) {
+    if (a === "--") return false;
+    if (/^--(count|files-with(out)?-matches?|quiet|silent)$/.test(a)) return true;
+    if (/^-[A-Za-z]*[clLq]/.test(a) && !a.startsWith("--")) return true;
+  }
+  return false;
 }
 
 function matches(rule: Rule, program: string, args: string[]): boolean {
@@ -78,6 +91,33 @@ function truncation(command: string, policy: Policy, deps: Deps): Decision {
   const { lines, captures, order } = flow(command);
   // output saved by an axi earlier in the same command line, then read by a pipeline that truncates
   const saved = captures.filter((c) => c.from.some((inv) => isAxi(inv.program)) && !c.from.some(isLog));
+  // a later `>` to the same file replaces what an earlier writer saved there (#22): `gh-axi a > f; git log > f`
+  // Captures arrive in run order (`seq` never decreases), so one backward pass finds, per capture,
+  // the first `>` to the same file that runs after it.
+  const until = new Map<Capture, number>();
+  const next = new Map<string, { group: number; truncates: boolean; first: number }>();
+  for (let k = captures.length - 1; k >= 0; k--) {
+    const c = captures[k];
+    if (c.kind !== "file") continue;
+    let n = next.get(c.name);
+    if (!n) next.set(c.name, (n = { group: c.seq, truncates: false, first: Infinity }));
+    if (c.seq !== n.group) {
+      if (n.truncates) n.first = n.group;
+      n.group = c.seq;
+      n.truncates = false;
+    }
+    until.set(c, n.first);
+    if (!c.append) n.truncates = true;
+  }
+  // built once per capture and per invocation, not per pair (#22)
+  const refs = new Map<Capture, RegExp>();
+  for (const c of saved) if (c.kind === "var") refs.set(c, new RegExp(`\\$\\{?${c.name}(?![A-Za-z0-9_])`));
+  const parsed = new Map<Invocation, Redirects>();
+  const wordsOf = (inv: Invocation): Redirects => {
+    let r = parsed.get(inv);
+    if (!r) parsed.set(inv, (r = redirects(inv.args, inv.literal)));
+    return r;
+  };
   for (const line of lines) {
     let found: { axi: string; cut: string; via?: Capture } | undefined;
     const at = line.findIndex((inv) => isAxi(inv.program));
@@ -85,9 +125,17 @@ function truncation(command: string, policy: Policy, deps: Deps): Decision {
     if (cut) found = { axi: line[at].program, cut: cut.program };
     let last = line.length - 1;
     while (last >= 0 && !TRUNCATORS.has(line[last].program)) last--;
-    for (let i = 0; !found && i <= last; i++) {
+    // a stage that only counts what it reads hides the saved output from the truncator: `grep -c x f | head`
+    let counted = -1;
+    for (let j = 0; j < last; j++) if (summarizes(line[j])) counted = j;
+    for (let i = counted + 1; !found && i <= last; i++) {
+      const when = order.get(line[i]) ?? -1;
+      const truncator = TRUNCATORS.has(line[i].program);
       const via = saved.find(
-        (c) => (order.get(line[i]) ?? -1) >= c.seq && feeds(line[i], c, TRUNCATORS.has(line[i].program)),
+        (c) =>
+          when >= c.seq &&
+          when < (until.get(c) ?? Infinity) &&
+          feeds(line[i], wordsOf(line[i]), c, refs.get(c), truncator),
       );
       const axi = via?.from.find((inv) => isAxi(inv.program));
       if (via && axi) found = { axi: axi.program, cut: line[last].program, via };

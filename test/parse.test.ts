@@ -65,6 +65,13 @@ describe("invocations: catches the CLI wherever it executes", () => {
     ["exec `command -v gh` pr list", ["_", "command", "gh"]],
     ["W=$(command -v wrangler); $W deploy", ["command", "$W", "wrangler"]],
     ['W=$(command -v wrangler); "${W}" deploy', ["command", "${W}", "wrangler"]],
+    // #26: lookups kept by local/export/declare, carried into `sh -c`, and in for-loop variables
+    ["local W=$(command -v wrangler); $W deploy", ["local", "command", "$W", "wrangler"]],
+    ["export W=$(command -v wrangler); $W deploy", ["export", "command", "$W", "wrangler"]],
+    ["declare -x W=$(command -v wrangler); $W deploy", ["declare", "command", "$W", "wrangler"]],
+    ['W=$(command -v wrangler); sh -c "$W deploy"', ["command", "sh", "$W", "wrangler"]],
+    ["for c in $(command -v wrangler); do $c deploy; done", ["for", "command", "$c", "wrangler", "done"]],
+    ["W=$(command -v wrangler 2>/dev/null); $W deploy", ["command", "$W", "wrangler"]],
   ])("%s", (cmd, want) => {
     expect(programs(cmd)).toEqual([...want].sort());
   });
@@ -89,6 +96,10 @@ describe("invocations: ignores text that never executes", () => {
     ["whereis supabase", ["whereis"]],
     ["hash wrangler", ["hash"]],
     ["REAL=$(command -v gh); echo $REAL", ["command", "echo"]],
+    // #26: only the variable the lookup was assigned to holds it, and a later assignment replaces it
+    ["d=$(date) W=$(command -v gh); $d", ["date", "command", "$d"]],
+    ["W=$(command -v gh); W=ls; $W", ["command", "$W"]],
+    ["for c in a b; do $c; done", ["for", "$c", "done"]],
     [
       "W=$(dirname $(readlink -f $(command -v wrangler))); ls $W/../wrangler-dist",
       ["command", "dirname", "ls", "readlink"],
@@ -179,6 +190,9 @@ describe("redirects: stdout files and stdin sources", () => {
   ])("%j", (ws, want) => {
     expect(redirects(ws)).toEqual(want);
   });
+  it("leaves literal (quoted) words alone (#22)", () => {
+    expect(redirects([">", "f", "x"], new Set([0]))).toEqual({ plain: [">", "f", "x"], inputs: [], outputs: [] });
+  });
 });
 
 describe("flow: output saved within the command line (#16)", () => {
@@ -191,6 +205,24 @@ describe("flow: output saved within the command line (#16)", () => {
     ["local out=$(gh-axi pr list)", [["var", "out", "gh-axi"]]],
     ["a=1 out=$(gh-axi pr list)", [["var", "out", "gh-axi"]]],
     ["out=$(gh-axi pr list) gh-axi x", []],
+    // #22: each assignment holds only the `$(...)` in its own word
+    [
+      "d=$(date) out=$(gh-axi pr list)",
+      [
+        ["var", "d", "date"],
+        ["var", "out", "gh-axi"],
+      ],
+    ],
+    ["tag=v_1 out=$(gh-axi pr list)", [["var", "out", "gh-axi"]]],
+    [
+      "local a=$(ls) out=`gh-axi pr list`",
+      [
+        ["var", "a", "ls"],
+        ["var", "out", "gh-axi"],
+      ],
+    ],
+    ['gh-axi issue create --title ">" f', []],
+    ["gh-axi pr list \\> f", []],
     ["gh-axi pr list > ./f", [["file", "f", "gh-axi"]]],
     ["gh-axi pr list | grep x >> f", [["file", "f", "gh-axi | grep"]]],
     ["{ gh-axi a; gh-axi b; } > f", [["file", "f", "gh-axi | gh-axi"]]],

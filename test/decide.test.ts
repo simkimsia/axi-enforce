@@ -57,6 +57,11 @@ describe("decide", () => {
     "command -v gh && gh pr list",
     "$(command -v gh) pr list",
     "R=$(command -v railway); $R up",
+    // #26
+    "local W=$(command -v railway); $W up",
+    "export W=$(command -v railway); $W up",
+    'W=$(command -v railway); sh -c "$W up"',
+    "for c in $(command -v railway); do $c up; done",
   ])("still denies `command` that runs the CLI: %s", (cmd) => {
     const { d } = deps();
     expect(decide(cmd, policy, d).decision).toBe("deny");
@@ -167,6 +172,12 @@ describe("decide", () => {
       ["gh-axi pr list > f; head -50 f | tail -10", "f", "tail"],
       ['out=$(gh-axi pr list); head -50 <<< "$out" | tail -5', "$out", "tail"],
       ["bash -c 'gh-axi pr list' > f; tail f", "f", "tail"],
+      // #22: the axi capture still counts next to other assignments, appends and literal words
+      ['d=$(date) out=$(gh-axi pr list); echo "$out" | head', "$out", "head"],
+      ["gh-axi pr list > f; git log >> f; head f", "f", "head"],
+      ["git log > f; gh-axi pr list > f; head f", "f", "head"],
+      ['gh-axi issue create --title ">" > f; head f', "f", "head"],
+      ["gh-axi pr list > f; grep x f | head", "f", "head"],
     ])("denies saved output: %s", (cmd, where, cut) => {
       const { d } = deps();
       const r = decide(cmd, policy, d);
@@ -196,6 +207,14 @@ describe("decide", () => {
       // a value used as an argument, not printed: its output is git's
       'sha=$(gh-axi api repos/o/r --jq .sha); git show "$sha" | head',
       "gh-axi pr list > f; wc -l f | head",
+      // #22: wrong denies fixed
+      'd=$(date) out=$(gh-axi pr list); echo "$d" | head',
+      'tag=v_1 out=$(gh-axi pr list); echo "$tag" | head',
+      "gh-axi pr list > f; grep -c x f | head",
+      "gh-axi pr list > f; grep -il x f | head",
+      "gh-axi pr list > f; cat f | wc -l | head",
+      "gh-axi pr list > f; git log > f; head f",
+      'gh-axi issue create --title ">" f; head f',
       // stderr only, or discarded
       "gh-axi pr list 2> err; tail err",
       "gh-axi pr list > /dev/null; head /dev/null",
