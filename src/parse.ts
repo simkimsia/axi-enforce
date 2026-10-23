@@ -522,10 +522,32 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
     const local = new Map(vars);
     const from = assignFrom(ws, inv);
     // `export W=...`, `declare -x W=...`, bare `export W`: W reaches child shells
-    const exporting =
-      inv?.program === "export" ||
-      ((inv?.program === "declare" || inv?.program === "typeset") && inv.args.some((a) => /^-[A-Za-z]*x/.test(a)));
-    if (exporting) for (const a of inv.args) if (/^[A-Za-z_][A-Za-z0-9_]*(=|$)/.test(a)) exported.add(a.split("=")[0]);
+    if (inv && ["export", "declare", "typeset"].includes(inv.program)) {
+      let exporting: boolean | undefined = inv.program === "export" ? true : undefined;
+      let printing = false;
+      let i = 0;
+      for (; i < inv.args.length; i++) {
+        const arg = inv.args[i];
+        if (arg === "--") {
+          i++;
+          break;
+        }
+        if (!/^[+-][A-Za-z]+$/.test(arg)) break;
+        if (arg.startsWith("-") && arg.includes("p")) printing = true;
+        if (inv.program === "export") {
+          if (arg.startsWith("-") && arg.includes("n")) exporting = false;
+        } else if (arg.includes("x")) exporting = arg.startsWith("-");
+      }
+      if (!printing && exporting !== undefined) {
+        for (const arg of inv.args.slice(i)) {
+          const name = arg.match(/^([A-Za-z_][A-Za-z0-9_]*)(=|$)/)?.[1];
+          if (name) {
+            if (exporting) exported.add(name);
+            else exported.delete(name);
+          }
+        }
+      }
+    }
     // `W=... sh -c '...'`: a prefix assignment is in that command's environment
     const prefixed = new Set<string>();
     for (const [name, ids] of assignments(seg, lx, 0)) {

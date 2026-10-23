@@ -66,6 +66,26 @@ describe("invocations: catches the CLI wherever it executes", () => {
     ["W=$(command -v wrangler); $W deploy", ["command", "$W", "wrangler"]],
     ['W=$(command -v wrangler); "${W}" deploy', ["command", "${W}", "wrangler"]],
     // #26: lookups kept by local/export/declare, carried into `sh -c`, and in for-loop variables
+    ...["export -n", "declare +x", "typeset +x", "declare +rx", "typeset +rx"].flatMap(
+      (remove) => [
+        [
+          `export W=$(command -v gh); ${remove} W; $W pr list`,
+          ["export", "command", remove.split(" ")[0], "$W", "gh"],
+        ],
+        [
+          `export W=$(command -v gh); ${remove} W; export W; bash -c '$W pr list'`,
+          ["export", "command", remove.split(" ")[0], "export", "bash", "$W", "gh"],
+        ],
+        [
+          `export W=$(command -v gh); ${remove} W; W=$W bash -c '$W pr list'`,
+          ["export", "command", remove.split(" ")[0], "bash", "$W", "gh"],
+        ],
+        [
+          `export W=$(command -v gh); ${remove} W; bash -c "$W pr list"`,
+          ["export", "command", remove.split(" ")[0], "bash", "gh"],
+        ],
+      ],
+    ),
     ["local W=$(command -v wrangler); $W deploy", ["local", "command", "$W", "wrangler"]],
     ["export W=$(command -v wrangler); $W deploy", ["export", "command", "$W", "wrangler"]],
     ["declare -x W=$(command -v wrangler); $W deploy", ["declare", "command", "$W", "wrangler"]],
@@ -96,6 +116,22 @@ describe("invocations: catches the CLI wherever it executes", () => {
 
 describe("invocations: ignores text that never executes", () => {
   it.each([
+    ...["export -n", "declare +x", "typeset +x", "declare +xr", "typeset +xr"].flatMap(
+      (remove) => [
+        [
+          `W=$(command -v gh); ${remove} W; bash -c '$W pr list'`,
+          ["command", remove.split(" ")[0], "bash", "$W"],
+        ],
+        [
+          `export W=$(command -v gh); ${remove} W; bash -c '$W pr list'`,
+          ["export", "command", remove.split(" ")[0], "bash", "$W"],
+        ],
+        [
+          `export W=$(command -v gh); ${remove} W="$W"; bash -c '$W pr list'`,
+          ["export", "command", remove.split(" ")[0], "bash", "$W"],
+        ],
+      ],
+    ),
     ["gh-axi pr list", ["gh-axi"]],
     ["grep gh file.txt", ["grep"]],
     ["echo 'gh api user; railway up'", ["echo"]],
