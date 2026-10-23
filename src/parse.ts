@@ -381,12 +381,34 @@ function shellScript(inv: Invocation): string | null {
   return null;
 }
 
+/** `$W`, `${W}`: a variable used as a word. */
+const VAR_WORD = /^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/;
+
 export function invocations(cmd: string, depth = 0): Invocation[] {
   const out: Invocation[] = [];
-  for (const seg of segments(cmd)) {
-    const inv = resolve(words(seg));
+  // what a `command -v` lookup found, per `$(...)` / backtick context and per variable assigned from one
+  const found = new Map<number, string[]>();
+  const vars = new Map<string, string[]>();
+  for (const seg of scan(cmd)) {
+    if (!seg.text) continue;
+    const ws = words(seg.text);
+    const inv = resolve(ws);
+    const looked = (seg.subs ?? []).flatMap((id) => found.get(id) ?? []);
+    if (looked.length) {
+      for (const w of inv ? [] : ws) {
+        const m = w.match(/^([A-Za-z_][A-Za-z0-9_]*)=/);
+        if (m) vars.set(m[1], looked);
+      }
+    }
     if (!inv) continue;
     out.push(inv);
+    if (inv.program === "command") {
+      const names = inv.args.filter((a) => !a.startsWith("-"));
+      found.set(seg.ctx, [...(found.get(seg.ctx) ?? []), ...names]);
+    }
+    // `$(command -v gh) pr list`, `W=$(command -v gh); $W pr list`: runs what the lookup found
+    const ran = inv.program === "_" ? looked : (vars.get(inv.program.match(VAR_WORD)?.[1] ?? "") ?? []);
+    for (const name of ran) out.push({ program: programName(name), args: inv.args });
     const script = depth < 4 ? shellScript(inv) : null;
     if (script) out.push(...invocations(script, depth + 1));
   }

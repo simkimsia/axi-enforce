@@ -51,7 +51,13 @@ describe("decide", () => {
     expect(decide(cmd, policy, d).decision).toBe("allow");
   });
 
-  it.each(["command railway up", "command -p gh pr list", "command -v gh && gh pr list"])(
+  it.each([
+    "command railway up",
+    "command -p gh pr list",
+    "command -v gh && gh pr list",
+    "$(command -v gh) pr list",
+    "R=$(command -v railway); $R up",
+  ])(
     "still denies `command` that runs the CLI: %s",
     (cmd) => {
       const { d } = deps();

@@ -59,6 +59,12 @@ describe("invocations: catches the CLI wherever it executes", () => {
     ["time wrangler deploy", ["wrangler"]],
     ["nice -n 5 wrangler deploy", ["wrangler"]],
     ["command -v wrangler && wrangler deploy", ["command", "wrangler"]],
+    // running what a lookup found runs the CLI
+    ["$(command -v wrangler) deploy", ["_", "command", "wrangler"]],
+    ['"$(command -v wrangler)" deploy', ["_", "command", "wrangler"]],
+    ["exec `command -v gh` pr list", ["_", "command", "gh"]],
+    ["W=$(command -v wrangler); $W deploy", ["command", "$W", "wrangler"]],
+    ['W=$(command -v wrangler); "${W}" deploy', ["command", "${W}", "wrangler"]],
   ])("%s", (cmd, want) => {
     expect(programs(cmd)).toEqual([...want].sort());
   });
