@@ -74,8 +74,8 @@ Saved output is followed only within one command line: a variable assigned from 
 and printed into a truncator (`echo`, `printf`, `<<<`), or a file written with `>`/`>>` and read by
 the truncator or by `cat`/`grep`/`sed`/... before it. Saving in one tool call and truncating in the
 next is not caught. A variable used as an argument (`git show "$sha" | head`) is not axi output.
-Appending with `>>` or writing conditionally (for example, `test -e cache && cat cache > f`)
-does not clear an earlier file capture.
+Appending with `>>`, writing conditionally (for example, `test -e cache && cat cache > f`), or
+writing inside a case arm or function body does not clear an earlier file capture.
 
 ## Supported agents
 
@@ -174,7 +174,8 @@ would **execute**:
 and ignores text that never runs: single-quoted strings, heredoc bodies (commit messages),
 arguments (`grep gh`), lookups (`command -v gh`, `which gh`; running what they found, as in
 `$(command -v gh) pr list`, `local W=$(command -v gh); $W pr list` (also `export` or `declare`),
-`W=$(command -v gh); sh -c "$W pr list"`
+`W=$(command -v gh); sh -c "$W pr list"`, `export W=$(command -v gh); sh -c '$W pr list'`
+(single-quoted: only when `W` is exported or prefixed, as in `W=$W sh -c '...'`)
 or `for c in $(command -v gh); do $c pr list; done`, is still caught), and look-alikes (`gh-axi`, `ghq`).
 
 It is a guardrail against habit, not a sandbox: `eval`, aliases, or a script file that calls
