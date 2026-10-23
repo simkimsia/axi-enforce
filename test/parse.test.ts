@@ -86,6 +86,18 @@ describe("invocations: catches the CLI wherever it executes", () => {
         ],
       ],
     ),
+    ...["(export -n W)", "echo $(export -n W)", "echo `export -n W`"].map((scope) => [
+      `export W=$(command -v gh); ${scope}; bash -c '$W pr list'`,
+      ["export", "command", "export", ...(scope.includes("echo") ? ["echo"] : []), "bash", "$W", "gh"],
+    ]),
+    [
+      "W=$(command -v gh); (export W; bash -c '$W pr list'); bash -c '$W pr list'",
+      ["command", "export", "bash", "$W", "gh", "bash", "$W"],
+    ],
+    [
+      "export W=$(command -v gh); (W=printf); bash -c '$W pr list'",
+      ["export", "command", "bash", "$W", "gh"],
+    ],
     ["local W=$(command -v wrangler); $W deploy", ["local", "command", "$W", "wrangler"]],
     ["export W=$(command -v wrangler); $W deploy", ["export", "command", "$W", "wrangler"]],
     ["declare -x W=$(command -v wrangler); $W deploy", ["declare", "command", "$W", "wrangler"]],
@@ -132,6 +144,25 @@ describe("invocations: ignores text that never executes", () => {
         ],
       ],
     ),
+    ...["'$W'", "'${W}'", "\\$W", '"\\$W"'].flatMap((value) => [
+      [`W=$(command -v gh); ${value} pr list`, ["command", value.includes("{") ? "${W}" : "$W"]],
+      ...["", "export ", "local ", "declare ", "typeset ", "readonly "].map((declaration) => [
+        `W=$(command -v gh); ${declaration}C=${value}; $C pr list`,
+        ["command", ...(declaration ? [declaration.trim()] : []), "$C"],
+      ]),
+      [
+        `W=$(command -v gh); C=${value} bash -c '$C pr list'`,
+        ["command", "bash", "$C"],
+      ],
+      [
+        `W=$(command -v gh); for C in ${value}; do $C pr list; done`,
+        ["command", "for", "$C", "done"],
+      ],
+    ]),
+    ...["(export W)", "echo $(export W)", "echo `export W`", "(echo $(export W))"].map((scope) => [
+      `W=$(command -v gh); ${scope}; bash -c '$W pr list'`,
+      ["command", "export", ...(scope.includes("echo") ? ["echo"] : []), "bash", "$W"],
+    ]),
     ["gh-axi pr list", ["gh-axi"]],
     ["grep gh file.txt", ["grep"]],
     ["echo 'gh api user; railway up'", ["echo"]],

@@ -504,21 +504,40 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
   // what a `command -v` lookup found, per `$(...)` / backtick context and per variable assigned from one.
   // A `sh -c` script starts from the variables its caller set (#26).
   const found = new Map<number, string[]>();
-  const vars = new Map<string, string[]>(outer);
+  const segments = scan(cmd);
+  const parents = new Map<number, number>();
+  for (const seg of segments) {
+    if (seg.parent !== undefined) parents.set(seg.ctx, seg.parent);
+    for (const id of seg.subs ?? []) parents.set(id, seg.ctx);
+  }
+  const bindings = new Map<number, Map<string, string[]>>([[0, new Map(outer)]]);
   // what a child shell sees: its caller's environment, so only exported variables (#26)
-  const exported = new Set<string>(outer?.keys());
+  const exports = new Map<number, Set<string>>([[0, new Set(outer?.keys())]]);
+  const context = (id: number): Map<string, string[]> => {
+    let vars = bindings.get(id);
+    if (!vars) {
+      const parent = parents.get(id) ?? 0;
+      vars = new Map(context(parent));
+      bindings.set(id, vars);
+      exports.set(id, new Set(exports.get(parent)));
+    }
+    return vars;
+  };
   const lookedIn = (ids: number[]) => ids.flatMap((id) => found.get(id) ?? []);
   const record = (bindings: Map<string, string[]>, name: string, looked: string[]) => {
     if (looked.length) bindings.set(name, looked);
     else bindings.delete(name);
   };
-  for (const seg of scan(cmd)) {
+  for (const seg of segments) {
+    const vars = context(seg.ctx);
+    const exported = exports.get(seg.ctx)!;
     if (!seg.text) continue;
     const lx = lex(seg.text);
     const ws = lx.words;
     const inv = resolve(ws);
     // `W=$(command -v gh)`, `local W=$(command -v gh)`: W holds what the lookup found (#26)
-    const references = (value: string) => vars.get(value.match(VAR_WORD)?.[1] ?? "") ?? [];
+    const references = (value: string, index: number, offset = 0) =>
+      lx.expanded.get(index)?.has(offset) ? (vars.get(value.match(VAR_WORD)?.[1] ?? "") ?? []) : [];
     const local = new Map(vars);
     const from = assignFrom(ws, inv);
     // `export W=...`, `declare -x W=...`, bare `export W`: W reaches child shells
@@ -553,7 +572,7 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
     for (const [name, ids] of assignments(seg, lx, 0)) {
       const index = ws.findIndex((w) => w.startsWith(`${name}=`));
       const value = ws[index].slice(name.length + 1);
-      const looked = [...lookedIn(ids), ...references(value)];
+      const looked = [...lookedIn(ids), ...references(value, index, name.length + 1)];
       if (index >= from) record(vars, name, looked);
       else if (index < ws.length - (inv?.args.length ?? 0) - 1) {
         record(local, name, looked);
@@ -565,7 +584,10 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
     const looked = lookedIn(seg.subs ?? []);
     // `for c in $(command -v gh); do $c ...`: the loop variable holds it too (#26)
     if (HEADERS.has(inv.program) && inv.args[1] === "in" && ASSIGNMENT.test(`${inv.args[0]}=`)) {
-      record(vars, inv.args[0], [...looked, ...inv.args.slice(2).flatMap(references)]);
+      record(vars, inv.args[0], [
+        ...looked,
+        ...inv.args.slice(2).flatMap((value, i) => references(value, ws.length - inv.args.length + 2 + i)),
+      ]);
     }
     if (inv.program === "command") {
       // `command -v x 2>/dev/null`: the redirection is not a name that was looked up (#26)
@@ -573,7 +595,7 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
       found.set(seg.ctx, [...(found.get(seg.ctx) ?? []), ...names]);
     }
     // `$(command -v gh) pr list`, `W=$(command -v gh); $W pr list`: runs what the lookup found
-    const ran = inv.program === "_" ? looked : (vars.get(inv.program.match(VAR_WORD)?.[1] ?? "") ?? []);
+    const ran = inv.program === "_" ? looked : references(inv.program, ws.length - inv.args.length - 1);
     for (const name of ran) out.push({ program: programName(name), args: inv.args });
     const scriptIndex = depth < 4 ? shellScriptIndex(inv) : null;
     if (scriptIndex !== null) {
