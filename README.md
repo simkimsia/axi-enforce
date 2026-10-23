@@ -168,7 +168,8 @@ would **execute**:
 - absolute and Windows paths: `/opt/homebrew/bin/gh`, `C:\tools\gh.exe`, `railway.cmd`
 
 and ignores text that never runs: single-quoted strings, heredoc bodies (commit messages),
-arguments (`grep gh`), and look-alikes (`gh-axi`, `ghq`).
+arguments (`grep gh`), lookups (`command -v gh`, `which gh`; running what they found, as in
+`$(command -v gh) pr list`, is still caught), and look-alikes (`gh-axi`, `ghq`).
 
 It is a guardrail against habit, not a sandbox: `eval`, aliases, or a script file that calls
 `gh` internally get through. It fails **open**: if the hook itself errors, the command runs,
