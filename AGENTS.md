@@ -47,3 +47,18 @@ instead of the plain CLIs they wrap, with an issue-backed escape hatch for gaps.
 - Gate commands live in `.no-mistakes.yaml`, which the gate reads from `main` only.
 - Greptile reviews every PR. It does not re-review new commits on its own: comment
   `@greptileai please re-review the latest head (<sha>)` after each push.
+  Its repo instructions live in `greptile.json`, which points it at `VISION.md`.
+
+## Review severity
+
+The threat model is in `VISION.md`: a guardrail against habit, not a sandbox. A review
+finding (Greptile or any other reviewer) blocks merge only if it is one of:
+
+1. a regression against the base branch or against an earlier head of the same PR,
+2. a crash in the hook path that fails open where the command used to be caught, or
+   that fails closed,
+3. a lockout: the hook denies a command it must allow and prints no escape, or
+4. a construct seen in real agent commands.
+
+Any other finding becomes a follow-up issue, and the PR can merge without it. Greptile
+5/5 is not the merge bar for this repo; a P1 outside these four is filed, not fixed.

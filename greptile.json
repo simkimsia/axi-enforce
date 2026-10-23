@@ -1,0 +1,17 @@
+{
+  "instructions": "axi-enforce is a guardrail against habit, not a sandbox (README.md, VISION.md). It fails open, and adversarial evasion is out of scope. Mark a finding P1 only if it is one of: (1) a regression against the base branch or against an earlier head of the same PR; (2) a crash or error in the hook path that fails open where it previously caught the command, or that fails closed; (3) a lockout, meaning the hook denies a command it must allow and prints no escape (AXI_GAP=, AXI_BYPASS=1, AXI_TRUNCATE=1); (4) a construct seen in real agent commands (cited from an issue, test, or transcript). Any other missed shell construct, such as eval, aliases, functions, unusual redirect orders, or constructed command strings, is at most P2 and should be suggested as a follow-up issue, not a merge blocker. Do not lower the confidence score for findings outside these four categories.",
+  "customContext": {
+    "files": [
+      {
+        "scope": [],
+        "path": "VISION.md",
+        "description": "Threat model and failure-mode rules every change is judged against."
+      },
+      {
+        "scope": [],
+        "path": "AGENTS.md",
+        "description": "Architecture, the fail-open rule, and the review severity rule for this repo."
+      }
+    ]
+  }
+}
