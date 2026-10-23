@@ -66,26 +66,21 @@ describe("invocations: catches the CLI wherever it executes", () => {
     ["W=$(command -v wrangler); $W deploy", ["command", "$W", "wrangler"]],
     ['W=$(command -v wrangler); "${W}" deploy', ["command", "${W}", "wrangler"]],
     // #26: lookups kept by local/export/declare, carried into `sh -c`, and in for-loop variables
-    ...["export -n", "declare +x", "typeset +x", "declare +rx", "typeset +rx"].flatMap(
-      (remove) => [
-        [
-          `export W=$(command -v gh); ${remove} W; $W pr list`,
-          ["export", "command", remove.split(" ")[0], "$W", "gh"],
-        ],
-        [
-          `export W=$(command -v gh); ${remove} W; export W; bash -c '$W pr list'`,
-          ["export", "command", remove.split(" ")[0], "export", "bash", "$W", "gh"],
-        ],
-        [
-          `export W=$(command -v gh); ${remove} W; W=$W bash -c '$W pr list'`,
-          ["export", "command", remove.split(" ")[0], "bash", "$W", "gh"],
-        ],
-        [
-          `export W=$(command -v gh); ${remove} W; bash -c "$W pr list"`,
-          ["export", "command", remove.split(" ")[0], "bash", "gh"],
-        ],
+    ...["export -n", "declare +x", "typeset +x", "declare +rx", "typeset +rx"].flatMap((remove) => [
+      [`export W=$(command -v gh); ${remove} W; $W pr list`, ["export", "command", remove.split(" ")[0], "$W", "gh"]],
+      [
+        `export W=$(command -v gh); ${remove} W; export W; bash -c '$W pr list'`,
+        ["export", "command", remove.split(" ")[0], "export", "bash", "$W", "gh"],
       ],
-    ),
+      [
+        `export W=$(command -v gh); ${remove} W; W=$W bash -c '$W pr list'`,
+        ["export", "command", remove.split(" ")[0], "bash", "$W", "gh"],
+      ],
+      [
+        `export W=$(command -v gh); ${remove} W; bash -c "$W pr list"`,
+        ["export", "command", remove.split(" ")[0], "bash", "gh"],
+      ],
+    ]),
     ...["(export -n W)", "echo $(export -n W)", "echo `export -n W`"].map((scope) => [
       `export W=$(command -v gh); ${scope}; bash -c '$W pr list'`,
       ["export", "command", "export", ...(scope.includes("echo") ? ["echo"] : []), "bash", "$W", "gh"],
@@ -94,10 +89,7 @@ describe("invocations: catches the CLI wherever it executes", () => {
       "W=$(command -v gh); (export W; bash -c '$W pr list'); bash -c '$W pr list'",
       ["command", "export", "bash", "$W", "gh", "bash", "$W"],
     ],
-    [
-      "export W=$(command -v gh); (W=printf); bash -c '$W pr list'",
-      ["export", "command", "bash", "$W", "gh"],
-    ],
+    ["export W=$(command -v gh); (W=printf); bash -c '$W pr list'", ["export", "command", "bash", "$W", "gh"]],
     ...["cleanup() { unset W; }", '[ -n "$X" ] && unset W'].map((unset) => [
       `W=$(command -v gh); ${unset}; $W pr list`,
       ["command", ...(unset.includes("cleanup") ? ["cleanup", "}"] : ["["]), "unset", "$W", "gh"],
@@ -136,44 +128,30 @@ describe("invocations: catches the CLI wherever it executes", () => {
 
 describe("invocations: ignores text that never executes", () => {
   it.each([
-    ...["export -n", "declare +x", "typeset +x", "declare +xr", "typeset +xr"].flatMap(
-      (remove) => [
-        [
-          `W=$(command -v gh); ${remove} W; bash -c '$W pr list'`,
-          ["command", remove.split(" ")[0], "bash", "$W"],
-        ],
-        [
-          `export W=$(command -v gh); ${remove} W; bash -c '$W pr list'`,
-          ["export", "command", remove.split(" ")[0], "bash", "$W"],
-        ],
-        [
-          `export W=$(command -v gh); ${remove} W="$W"; bash -c '$W pr list'`,
-          ["export", "command", remove.split(" ")[0], "bash", "$W"],
-        ],
+    ...["export -n", "declare +x", "typeset +x", "declare +xr", "typeset +xr"].flatMap((remove) => [
+      [`W=$(command -v gh); ${remove} W; bash -c '$W pr list'`, ["command", remove.split(" ")[0], "bash", "$W"]],
+      [
+        `export W=$(command -v gh); ${remove} W; bash -c '$W pr list'`,
+        ["export", "command", remove.split(" ")[0], "bash", "$W"],
       ],
-    ),
+      [
+        `export W=$(command -v gh); ${remove} W="$W"; bash -c '$W pr list'`,
+        ["export", "command", remove.split(" ")[0], "bash", "$W"],
+      ],
+    ]),
     ...["unset", "unset -v"].flatMap((remove) => [
       [`export W=$(command -v gh); ${remove} W; bash -c '$W pr list'`, ["export", "command", "unset", "bash", "$W"]],
       [`W=$(command -v gh); ${remove} W; bash -c "$W pr list"`, ["command", "unset", "bash", "$W"]],
     ]),
-    [
-      "W=$(command -v gh); fn() { export W; }; bash -c '$W pr list'",
-      ["command", "fn", "export", "}", "bash", "$W"],
-    ],
+    ["W=$(command -v gh); fn() { export W; }; bash -c '$W pr list'", ["command", "fn", "export", "}", "bash", "$W"]],
     ...["'$W'", "'${W}'", "\\$W", '"\\$W"'].flatMap((value) => [
       [`W=$(command -v gh); ${value} pr list`, ["command", value.includes("{") ? "${W}" : "$W"]],
       ...["", "export ", "local ", "declare ", "typeset ", "readonly "].map((declaration) => [
         `W=$(command -v gh); ${declaration}C=${value}; $C pr list`,
         ["command", ...(declaration ? [declaration.trim()] : []), "$C"],
       ]),
-      [
-        `W=$(command -v gh); C=${value} bash -c '$C pr list'`,
-        ["command", "bash", "$C"],
-      ],
-      [
-        `W=$(command -v gh); for C in ${value}; do $C pr list; done`,
-        ["command", "for", "$C", "done"],
-      ],
+      [`W=$(command -v gh); C=${value} bash -c '$C pr list'`, ["command", "bash", "$C"]],
+      [`W=$(command -v gh); for C in ${value}; do $C pr list; done`, ["command", "for", "$C", "done"]],
     ]),
     ...["(export W)", "echo $(export W)", "echo `export W`", "(echo $(export W))"].map((scope) => [
       `W=$(command -v gh); ${scope}; bash -c '$W pr list'`,
