@@ -71,6 +71,15 @@ describe("invocations: catches the CLI wherever it executes", () => {
     ["declare -x W=$(command -v wrangler); $W deploy", ["declare", "command", "$W", "wrangler"]],
     ['W=$(command -v wrangler); sh -c "$W deploy"', ["command", "sh", "$W", "wrangler"]],
     ["for c in $(command -v wrangler); do $c deploy; done", ["for", "command", "$c", "wrangler", "done"]],
+    ['W=$(command -v gh); export W="$W"; $W pr list', ["command", "export", "$W", "gh"]],
+    ['W=$(command -v gh); local C="${W}"; $C pr list', ["command", "local", "$C", "gh"]],
+    ['W=$(command -v gh); declare C="${W}"; $C pr list', ["command", "declare", "$C", "gh"]],
+    ['W=$(command -v gh); typeset C="${W}"; $C pr list', ["command", "typeset", "$C", "gh"]],
+    ['W=$(command -v gh); readonly C="${W}"; $C pr list', ["command", "readonly", "$C", "gh"]],
+    ['W=$(command -v gh); C="$W"; $C pr list', ["command", "$C", "gh"]],
+    ['W=$(command -v gh); for c in "$W"; do $c pr list; done', ["command", "for", "$c", "gh", "done"]],
+    ["W=$(command -v gh); W=printf sh -c '$W hello'", ["command", "sh", "$W"]],
+    ["W=$(command -v gh); W=printf sh -c '$W hello'; $W pr list", ["command", "sh", "$W", "$W", "gh"]],
     ["W=$(command -v wrangler 2>/dev/null); $W deploy", ["command", "$W", "wrangler"]],
   ])("%s", (cmd, want) => {
     expect(programs(cmd)).toEqual([...want].sort());

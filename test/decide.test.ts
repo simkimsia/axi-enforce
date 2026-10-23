@@ -178,6 +178,16 @@ describe("decide", () => {
       ["git log > f; gh-axi pr list > f; head f", "f", "head"],
       ['gh-axi issue create --title ">" > f; head f', "f", "head"],
       ["gh-axi pr list > f; grep x f | head", "f", "head"],
+      ["gh-axi pr list > f; head f | wc -l | head", "f", "head"],
+      ["gh-axi pr list > f; { cat f; wc -l other; } | head", "f", "head"],
+      ["gh-axi pr list > f; sh -c 'cat f; wc -l other' | head", "f", "head"],
+      ["gh-axi pr list > f; (cat f; wc -l other) | head", "f", "head"],
+      ["gh-axi pr list > f; grep -e '-label' f | head", "f", "head"],
+      ["gh-axi pr list > f; grep --regexp '--count' f | head", "f", "head"],
+      ["gh-axi pr list > f; grep -f '-list' f | head", "f", "head"],
+      ["gh-axi pr list > f; grep --file '--count' f | head", "f", "head"],
+      ["gh-axi pr list > f; grep -e-label f | head", "f", "head"],
+      ["gh-axi pr list > f; grep -f-list f | head", "f", "head"],
     ])("denies saved output: %s", (cmd, where, cut) => {
       const { d } = deps();
       const r = decide(cmd, policy, d);
@@ -213,6 +223,12 @@ describe("decide", () => {
       "gh-axi pr list > f; grep -c x f | head",
       "gh-axi pr list > f; grep -il x f | head",
       "gh-axi pr list > f; cat f | wc -l | head",
+      "gh-axi pr list > f; cat f | (wc -l) | head",
+      "gh-axi pr list > f; cat f | sh -c 'wc -l' | head",
+      "gh-axi pr list > f; { cat f | wc -l; } | head",
+      "gh-axi pr list > f; grep -e x -c f | head",
+      "gh-axi pr list > f; grep --regexp=x --count f | head",
+      "gh-axi pr list > f; cat f | grep -c x | head",
       "gh-axi pr list > f; git log > f; head f",
       'gh-axi issue create --title ">" f; head f',
       // stderr only, or discarded

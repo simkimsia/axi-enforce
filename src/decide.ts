@@ -54,10 +54,26 @@ type Redirects = ReturnType<typeof redirects>;
 function summarizes(inv: Invocation): boolean {
   if (inv.program === "wc") return true;
   if (inv.program !== "grep") return false;
-  for (const a of inv.args) {
-    if (a === "--") return false;
-    if (/^--(count|files-with(out)?-matches?|quiet|silent)$/.test(a)) return true;
-    if (/^-[A-Za-z]*[clLq]/.test(a) && !a.startsWith("--")) return true;
+  const args = redirects(inv.args, inv.literal).plain;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--") break;
+    if (a === "--regexp" || a === "--file") {
+      i++;
+      continue;
+    }
+    if (a.startsWith("--")) {
+      if (/^--(count|files-with(out)?-matches|quiet|silent)$/.test(a)) return true;
+      continue;
+    }
+    if (!a.startsWith("-")) continue;
+    for (let j = 1; j < a.length; j++) {
+      if ("efmABC".includes(a[j])) {
+        if (j === a.length - 1) i++;
+        break;
+      }
+      if ("clLq".includes(a[j])) return true;
+    }
   }
   return false;
 }
@@ -88,7 +104,7 @@ export function decide(command: string, policy: Policy, deps: Deps): Decision {
 function truncation(command: string, policy: Policy, deps: Deps): Decision {
   const axis = new Set(policy.rules.map((r) => r.axi));
   const isAxi = (p: string) => axis.has(p) || p.endsWith("-axi");
-  const { lines, captures, order } = flow(command);
+  const { lines, captures, order, pipes } = flow(command);
   // output saved by an axi earlier in the same command line, then read by a pipeline that truncates
   const saved = captures.filter((c) => c.from.some((inv) => isAxi(inv.program)) && !c.from.some(isLog));
   // a later `>` to the same file replaces what an earlier writer saved there (#22): `gh-axi a > f; git log > f`
@@ -126,9 +142,15 @@ function truncation(command: string, policy: Policy, deps: Deps): Decision {
     let last = line.length - 1;
     while (last >= 0 && !TRUNCATORS.has(line[last].program)) last--;
     // a stage that only counts what it reads hides the saved output from the truncator: `grep -c x f | head`
-    let counted = -1;
-    for (let j = 0; j < last; j++) if (summarizes(line[j])) counted = j;
-    for (let i = counted + 1; !found && i <= last; i++) {
+    const counted = new Set<Invocation>();
+    for (let i = last; i >= 0; i--) {
+      if (TRUNCATORS.has(line[i].program)) continue;
+      if (summarizes(line[i]) || (counted.has(line[i + 1]) && pipes.get(line[i + 1]) === line[i])) {
+        counted.add(line[i]);
+      }
+    }
+    for (let i = 0; !found && i <= last; i++) {
+      if (counted.has(line[i])) continue;
       const when = order.get(line[i]) ?? -1;
       const truncator = TRUNCATORS.has(line[i].program);
       const via = saved.find(

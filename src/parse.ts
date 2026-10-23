@@ -475,9 +475,9 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
   const found = new Map<number, string[]>();
   const vars = new Map<string, string[]>(outer);
   const lookedIn = (ids: number[]) => ids.flatMap((id) => found.get(id) ?? []);
-  const record = (name: string, looked: string[]) => {
-    if (looked.length) vars.set(name, looked);
-    else vars.delete(name);
+  const record = (bindings: Map<string, string[]>, name: string, looked: string[]) => {
+    if (looked.length) bindings.set(name, looked);
+    else bindings.delete(name);
   };
   for (const seg of scan(cmd)) {
     if (!seg.text) continue;
@@ -485,13 +485,22 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
     const ws = lx.words;
     const inv = resolve(ws);
     // `W=$(command -v gh)`, `local W=$(command -v gh)`: W holds what the lookup found (#26)
-    for (const [name, ids] of assignments(seg, lx, assignFrom(ws, inv))) record(name, lookedIn(ids));
+    const references = (value: string) => vars.get(value.match(VAR_WORD)?.[1] ?? "") ?? [];
+    const local = new Map(vars);
+    const from = assignFrom(ws, inv);
+    for (const [name, ids] of assignments(seg, lx, 0)) {
+      const index = ws.findIndex((w) => w.startsWith(`${name}=`));
+      const value = ws[index].slice(name.length + 1);
+      const looked = [...lookedIn(ids), ...references(value)];
+      if (index >= from) record(vars, name, looked);
+      else if (index < ws.length - (inv?.args.length ?? 0) - 1) record(local, name, looked);
+    }
     if (!inv) continue;
     out.push(inv);
     const looked = lookedIn(seg.subs ?? []);
     // `for c in $(command -v gh); do $c ...`: the loop variable holds it too (#26)
     if (HEADERS.has(inv.program) && inv.args[1] === "in" && ASSIGNMENT.test(`${inv.args[0]}=`)) {
-      record(inv.args[0], looked);
+      record(vars, inv.args[0], [...looked, ...inv.args.slice(2).flatMap(references)]);
     }
     if (inv.program === "command") {
       // `command -v x 2>/dev/null`: the redirection is not a name that was looked up (#26)
@@ -502,7 +511,7 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
     const ran = inv.program === "_" ? looked : (vars.get(inv.program.match(VAR_WORD)?.[1] ?? "") ?? []);
     for (const name of ran) out.push({ program: programName(name), args: inv.args });
     const script = depth < 4 ? shellScript(inv) : null;
-    if (script) out.push(...invocations(script, depth + 1, vars));
+    if (script) out.push(...invocations(script, depth + 1, local));
   }
   return out;
 }
@@ -533,7 +542,7 @@ interface Frame {
  * `$(...)` and backticks feed arguments, not stdin, so they never join the outer pipeline.
  */
 export function pipelines(cmd: string, depth = 0): Invocation[][] {
-  return walk(cmd, depth, { order: new Map(), captures: [] }).out;
+  return walk(cmd, depth, { order: new Map(), captures: [], pipes: new Map() }).out;
 }
 
 /**
@@ -559,16 +568,18 @@ export interface Flow {
   captures: Capture[];
   /** run order of each invocation in `lines` and `captures` */
   order: Map<Invocation, number>;
+  pipes: Map<Invocation, Invocation>;
 }
 
 export function flow(cmd: string): Flow {
-  const st: FlowState = { order: new Map(), captures: [] };
+  const st: FlowState = { order: new Map(), captures: [], pipes: new Map() };
   const { out } = walk(cmd, 0, st);
-  return { lines: out, captures: st.captures, order: st.order };
+  return { lines: out, captures: st.captures, order: st.order, pipes: st.pipes };
 }
 
 interface FlowState {
   order: Map<Invocation, number>;
+  pipes: Map<Invocation, Invocation>;
   captures: Capture[];
 }
 
@@ -638,6 +649,7 @@ function walk(cmd: string, depth: number, st: FlowState): { out: Invocation[][];
   const out: Invocation[][] = [];
   // open pipeline per context: segments of one context arrive in order, inner contexts interleave
   const open = new Map<number, Invocation[]>();
+  const tails = new Map<number, Invocation>();
   // per context: every invocation that runs there, including inside its `( )` subshells
   const members = new Map<number, Invocation[]>();
   // per context: the `{ }` / `if` / loop groups not yet closed
@@ -657,6 +669,9 @@ function walk(cmd: string, depth: number, st: FlowState): { out: Invocation[][];
       if (feed && seg.parent !== undefined) {
         open.delete(seg.parent);
         open.set(seg.ctx, feed);
+        const tail = tails.get(seg.parent);
+        if (tail) tails.set(seg.ctx, tail);
+        tails.delete(seg.parent);
         fed.set(seg.ctx, feed);
       }
       continue;
@@ -679,6 +694,7 @@ function walk(cmd: string, depth: number, st: FlowState): { out: Invocation[][];
       feed = frame?.feed;
     }
     if (unit) {
+      tails.delete(seg.ctx);
       if (seg.pipe && (feed || unit.length)) {
         const line = feed ?? [];
         if (!feed) out.push(line);
@@ -716,16 +732,23 @@ function walk(cmd: string, depth: number, st: FlowState): { out: Invocation[][];
     const piped = open.get(seg.ctx);
     const line = piped ?? [];
     if (!piped) out.push(line);
+    const previous = piped ? tails.get(seg.ctx) : undefined;
+    if (previous) st.pipes.set(inv, previous);
+    tails.set(seg.ctx, inv);
     line.push(inv);
     if (seg.pipe) open.set(seg.ctx, line);
     else open.delete(seg.ctx);
     const script = depth < 4 ? shellScript(inv) : null;
     let printed: Invocation[] = [];
     if (script) {
+      tails.delete(seg.ctx);
       const inner = walk(script, depth + 1, st);
       // a pipe into the wrapper feeds the script's first top-level pipeline: `gh-axi ... | bash -c 'head'`
       const first = piped ? inner.out.find((l) => l.some((x) => inner.top.includes(x))) : undefined;
-      if (first) line.push(...first);
+      if (first) {
+        if (first.length) st.pipes.set(first[0], inv);
+        line.push(...first);
+      }
       out.push(...inner.out.filter((l) => l !== first));
       // the script's output is the wrapper's output: `bash -c 'gh-axi ...' | head` truncates gh-axi.
       // Commands inside its $(...) or backticks only feed arguments, so they stay out.
