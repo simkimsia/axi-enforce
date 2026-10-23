@@ -60,7 +60,8 @@ axi-enforce:         deny: Don't pipe gh-axi through tail: axi output is already
 | `out=$(<axi> ...); echo "$out" \| head`, `<axi> ... > f; tail f` (same command line) | Refused, same reason.                                      |
 | `gh-axi run watch ... > f; tail f`                                                   | Allowed: that is tailing a CI log.                         |
 | `<axi> ... \| grep x`, or output saved and read whole (`> f; cat f`)                 | Allowed.                                                   |
-| Saved output only counted (`grep -c x f \| head`, `wc -l`), or `f` overwritten since | Allowed: what is truncated is no longer the axi output.    |
+| Saved output only counted (`grep -c x f \| head`, `wc -l`) | Allowed: the truncator receives counts. |
+| `<axi> ... > f; git log > f; head f` | Allowed: the later unconditional stdout writer replaces the saved output. |
 | Deliberately wanting part of a long output (e.g. CI logs)                            | Prefix `AXI_TRUNCATE=1`. Allowed and logged as `truncate`. |
 | You don't want this check                                                            | `"truncation": false` in `policy.json`.                    |
 
@@ -73,6 +74,8 @@ Saved output is followed only within one command line: a variable assigned from 
 and printed into a truncator (`echo`, `printf`, `<<<`), or a file written with `>`/`>>` and read by
 the truncator or by `cat`/`grep`/`sed`/... before it. Saving in one tool call and truncating in the
 next is not caught. A variable used as an argument (`git show "$sha" | head`) is not axi output.
+Appending with `>>` or writing conditionally (for example, `test -e cache && cat cache > f`)
+does not clear an earlier file capture.
 
 ## Supported agents
 
@@ -170,7 +173,8 @@ would **execute**:
 
 and ignores text that never runs: single-quoted strings, heredoc bodies (commit messages),
 arguments (`grep gh`), lookups (`command -v gh`, `which gh`; running what they found, as in
-`$(command -v gh) pr list`, `local W=$(command -v gh); $W pr list`, `sh -c "$W pr list"`
+`$(command -v gh) pr list`, `local W=$(command -v gh); $W pr list` (also `export` or `declare`),
+`W=$(command -v gh); sh -c "$W pr list"`
 or `for c in $(command -v gh); do $c pr list; done`, is still caught), and look-alikes (`gh-axi`, `ghq`).
 
 It is a guardrail against habit, not a sandbox: `eval`, aliases, or a script file that calls
