@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { argvToCommand, invocations, pipelines } from "../src/parse.js";
+import { argvToCommand, flow, invocations, pipelines, redirects } from "../src/parse.js";
 
 // order is irrelevant to enforcement (inner $(...) is emitted first), so compare sorted
 const programs = (cmd: string) =>
@@ -117,6 +117,47 @@ describe("pipelines: which programs share a pipe", () => {
     ["bash -lc 'gh-axi pr list | tail -3'", [["bash"], ["gh-axi", "tail"]]],
   ])("%s", (cmd, want) => {
     expect(lines(cmd)).toEqual(want);
+  });
+});
+
+describe("redirects: stdout files and stdin sources", () => {
+  it.each([
+    [["x", ">", "f"], { plain: ["x"], inputs: [], outputs: ["f"] }],
+    [["x", ">>f", "2>&1"], { plain: ["x"], inputs: [], outputs: ["f"] }],
+    [["x", "1>", "f", "&>g", ">|h"], { plain: ["x"], inputs: [], outputs: ["f", "g", "h"] }],
+    [["x", "2>", "err", ">&2"], { plain: ["x"], inputs: [], outputs: [] }],
+    [["-3", "<", "f", "<<<", "$out"], { plain: ["-3"], inputs: ["f", "$out"], outputs: [] }],
+    [["a>b", "-->"], { plain: ["a>b", "-->"], inputs: [], outputs: [] }],
+  ])("%j", (ws, want) => {
+    expect(redirects(ws)).toEqual(want);
+  });
+});
+
+describe("flow: output saved within the command line (#16)", () => {
+  const saved = (cmd: string) =>
+    flow(cmd).captures.map((c) => [c.kind, c.name, c.from.map((i) => i.program).join(" | ")]);
+  it.each([
+    ["out=$(gh-axi pr list)", [["var", "out", "gh-axi"]]],
+    ['out="$(gh-axi pr list | grep x)"; echo', [["var", "out", "gh-axi | grep"]]],
+    ["out=`gh-axi pr list`", [["var", "out", "gh-axi"]]],
+    ["local out=$(gh-axi pr list)", [["var", "out", "gh-axi"]]],
+    ["a=1 out=$(gh-axi pr list)", [["var", "out", "gh-axi"]]],
+    ["out=$(gh-axi pr list) gh-axi x", []],
+    ["gh-axi pr list > ./f", [["file", "f", "gh-axi"]]],
+    ["gh-axi pr list | grep x >> f", [["file", "f", "gh-axi | grep"]]],
+    ["{ gh-axi a; gh-axi b; } > f", [["file", "f", "gh-axi | gh-axi"]]],
+    ["(gh-axi a) &> f", [["file", "f", "gh-axi"]]],
+    ["gh-axi a 2> f; gh-axi b > /dev/null", []],
+    ["bash -c 'gh-axi a > f'", [["file", "f", "gh-axi"]]],
+  ])("%s", (cmd, want) => {
+    expect(saved(cmd)).toEqual(want);
+  });
+  it("orders captures against the invocations that read them", () => {
+    const f = flow("head f; gh-axi a > f; tail f");
+    const [head, , tail] = f.lines.map((l) => l[0]);
+    const seq = f.captures[0].seq;
+    expect(f.order.get(head)).toBeLessThan(seq);
+    expect(f.order.get(tail)).toBeGreaterThanOrEqual(seq);
   });
 });
 

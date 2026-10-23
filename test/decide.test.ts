@@ -103,13 +103,11 @@ describe("decide", () => {
     });
     it.each([
       "gh-axi pr view 3 | grep state",
-      "gh-axi pr list > out.txt; tail out.txt",
       "git log | head -5",
       "gh-axi pr list || tail x",
       "gh-axi pr list; echo | head",
       "for r in a b; do gh-axi repo view $r; done; echo | head",
       "(gh-axi pr list); echo | head",
-      "bash -lc 'gh-axi pr list > f; tail f'",
       "gh-axi pr list | bash -c 'cat'",
       // the pipe applies to echo's output; the axi output only reaches it as an argument
       "echo $(gh-axi pr list) | head",
@@ -120,6 +118,79 @@ describe("decide", () => {
       const { d } = deps();
       expect(decide(cmd, policy, d).decision).toBe("allow");
     });
+    // output saved earlier in the same command line, then truncated (#16)
+    it.each([
+      ['out=$(gh-axi pr list); echo "$out" | head', "$out", "head"],
+      ["out=$(gh-axi pr list) && echo $out | tail -3", "$out", "tail"],
+      ['out="$(gh-axi pr list 2>&1)"; printf \'%s\\n\' "${out}" | cut -c1-40', "$out", "cut"],
+      ['out=`gh-axi pr list`; head -3 <<< "$out"', "$out", "head"],
+      ['local out=$(gh-axi pr list); echo "$out" | head', "$out", "head"],
+      ['a=1 out=$(gh-axi pr list); echo "$out" | grep x | head', "$out", "head"],
+      ['out=$(gh-axi pr list | grep open); echo "$out" | head', "$out", "head"],
+      ['out=$(bash -c "gh-axi pr list"); echo "$out" | head', "$out", "head"],
+      ["gh-axi pr list > out.txt; tail out.txt", "out.txt", "tail"],
+      ["gh-axi pr list >> f; head -n 5 f", "f", "head"],
+      ["gh-axi pr list > ./f 2>&1; head f", "f", "head"],
+      ["gh-axi pr list &> f; tail f", "f", "tail"],
+      ["gh-axi pr list >f && head <f", "f", "head"],
+      ["gh-axi pr list > f; cat f | cut -c1-9", "f", "cut"],
+      ["gh-axi pr list | grep x > f; head f", "f", "head"],
+      ["{ gh-axi pr list; gh-axi issue list; } > f; tail f", "f", "tail"],
+      ["(gh-axi pr list) > f; tail f", "f", "tail"],
+      ["for r in a b; do gh-axi repo view $r; done > f; head f", "f", "head"],
+      ["gh-axi pr list > f; (head f)", "f", "head"],
+      ["bash -lc 'gh-axi pr list > f; tail f'", "f", "tail"],
+      ["gh-axi pr list > f; bash -c 'head f'", "f", "head"],
+      ["railway-axi status > f; tail f", "f", "tail"],
+    ])("denies saved output: %s", (cmd, where, cut) => {
+      const { d } = deps();
+      const r = decide(cmd, policy, d);
+      expect(r.decision).toBe("deny");
+      expect(r.reason).toContain(`saved in ${where} with ${cut}`);
+      expect(r.reason).toMatch(/axi output is already compact/);
+      expect(r.reason).toContain("AXI_TRUNCATE=1");
+    });
+    it.each([
+      // legitimate log tailing (#16)
+      "gh-axi run watch 9 > f; tail f",
+      "gh-axi run watch 9 --exit-status >> ci.log 2>&1; tail -50 ci.log",
+      'out=$(gh-axi run watch 9); echo "$out" | tail -20',
+      // not an axi
+      'out=$(git log); echo "$out" | head',
+      "git log > f; head f",
+      'out=`ls`; head -3 <<< "$out"',
+      // saved, but not truncated, or something else truncated
+      'out=$(gh-axi pr list); echo "$out"',
+      'out=$(gh-axi pr list); echo "$out" | grep x',
+      "gh-axi pr list > f; grep x f",
+      "gh-axi pr list > f; cat f",
+      'out=$(gh-axi pr list); echo "$output" | head',
+      'a=1 out=$(gh-axi pr list); echo "$a" | head',
+      "gh-axi pr list > f; head g",
+      "gh-axi pr list > f; tail -n 3 notes.txt",
+      // a value used as an argument, not printed: its output is git's
+      'sha=$(gh-axi api repos/o/r --jq .sha); git show "$sha" | head',
+      "gh-axi pr list > f; wc -l f | head",
+      // stderr only, or discarded
+      "gh-axi pr list 2> err; tail err",
+      "gh-axi pr list > /dev/null; head /dev/null",
+      // read before it was written
+      "head f; gh-axi pr list > f",
+      // capture and truncation in separate commands are out of scope
+      "tail f",
+      'echo "$out" | head',
+    ])("allows %s", (cmd) => {
+      const { d } = deps();
+      expect(decide(cmd, policy, d).decision).toBe("allow");
+    });
+    it.each(['AXI_TRUNCATE=1 out=$(gh-axi pr list); echo "$out" | head', "gh-axi pr list > f; AXI_TRUNCATE=1 tail f"])(
+      "AXI_TRUNCATE=1 lets saved output through and logs it: %s",
+      (cmd) => {
+        const { d, logged } = deps();
+        expect(decide(cmd, policy, d).decision).toBe("allow");
+        expect(logged[0]).toContain("truncate");
+      },
+    );
     it("AXI_TRUNCATE=1 lets it through and logs it", () => {
       const { d, logged } = deps();
       expect(decide("AXI_TRUNCATE=1 gh-axi run view 9 --log | tail -50", policy, d).decision).toBe("allow");

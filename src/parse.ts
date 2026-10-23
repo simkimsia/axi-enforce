@@ -85,6 +85,8 @@ export interface Segment {
   group?: number;
   /** an empty marker: the `( )` subshell `ctx` opens here, so a pipe into it can follow in order */
   opens?: boolean;
+  /** ids of the `$(...)` / backtick contexts opened inside this segment, in order */
+  subs?: number[];
 }
 
 /** Split into simple-command segments, following the contexts where code executes. */
@@ -127,6 +129,8 @@ export function scan(cmd: string): Segment[] {
   const parents: (number | undefined)[] = [undefined];
   // per buffer: a `( )` subshell that just closed in it, so the next flush carries it even if empty
   const closed: (number | undefined)[] = [undefined];
+  // per buffer: the `$(...)` / backtick contexts opened in its current segment
+  const opened: number[][] = [[]];
   let nextId = 1;
   const top = () => stack[stack.length - 1];
   const flush = (pipe = false) => {
@@ -137,18 +141,22 @@ export function scan(cmd: string): Segment[] {
       const seg: Segment = { text: s, pipe, ctx: ids[k] };
       if (parents[k] !== undefined) seg.parent = parents[k];
       if (group !== undefined) seg.group = group;
+      if (opened[k].length) seg.subs = opened[k];
       segs.push(seg);
     }
     bufs[k] = "";
     closed[k] = undefined;
+    opened[k] = [];
   };
   const push = (ctx: string) => {
     const parent = ids[ids.length - 1];
+    if (ctx !== "grp") opened[opened.length - 1].push(nextId);
     stack.push(ctx);
     bufs.push("");
     ids.push(nextId++);
     parents.push(ctx === "grp" ? parent : undefined);
     closed.push(undefined);
+    opened.push([]);
     if (ctx === "grp") segs.push({ text: "", pipe: false, ctx: ids[ids.length - 1], parent, opens: true });
   };
   const pop = () => {
@@ -158,6 +166,7 @@ export function scan(cmd: string): Segment[] {
     const id = ids.pop();
     parents.pop();
     closed.pop();
+    opened.pop();
     if (kind === "grp") closed[closed.length - 1] = id;
   };
   const add = (c: string) => (bufs[bufs.length - 1] += c);
@@ -260,6 +269,7 @@ export function scan(cmd: string): Segment[] {
     ids.pop();
     parents.pop();
     closed.pop();
+    opened.pop();
   }
   return segs;
 }
@@ -397,11 +407,92 @@ interface Frame {
  * `$(...)` and backticks feed arguments, not stdin, so they never join the outer pipeline.
  */
 export function pipelines(cmd: string, depth = 0): Invocation[][] {
-  return walk(cmd, depth).out;
+  return walk(cmd, depth, { order: new Map(), captures: [] }).out;
+}
+
+/**
+ * Output saved for later in the same command line (#16):
+ * - `var`: a shell variable assigned from `$(...)` or backticks (`out=$(a)`, `local out=$(a)`),
+ * - `file`: a file written by stdout redirection (`a > f`, `a >> f`, `{ a; } > f`).
+ */
+export interface Capture {
+  kind: "var" | "file";
+  /** the variable name, or the file path as written (a leading `./` dropped) */
+  name: string;
+  /** the invocations whose output was saved: the pipeline into the file, or what ran in the `$(...)` */
+  from: Invocation[];
+  /** `order` value from which a later invocation can read the saved output */
+  seq: number;
+}
+
+/** `pipelines()` plus the data flow outside pipes: what was saved, and the run order of each invocation. */
+export interface Flow {
+  lines: Invocation[][];
+  captures: Capture[];
+  /** run order of each invocation in `lines` and `captures` */
+  order: Map<Invocation, number>;
+}
+
+export function flow(cmd: string): Flow {
+  const st: FlowState = { order: new Map(), captures: [] };
+  const { out } = walk(cmd, 0, st);
+  return { lines: out, captures: st.captures, order: st.order };
+}
+
+interface FlowState {
+  order: Map<Invocation, number>;
+  captures: Capture[];
+}
+
+/** Builtins whose `name=value` arguments set shell variables: `local out=$(a)`. */
+const DECLARERS = new Set(["local", "export", "declare", "typeset", "readonly"]);
+
+/** A redirection word: optional fd (`2`, `&`), the operator, and the target if glued (`>f`). */
+const REDIRECT_WORD = /^(\d*|&)(>>|>\||>|<<<|<)(.*)$/s;
+
+/**
+ * Split a command's words into plain arguments and redirections.
+ * `outputs`: files that receive stdout (`>f`, `>> f`, `1>f`, `&>f`); `2>f` and `>&2` are not stdout.
+ * `inputs`: what stdin reads (`< f` targets, `<<< word` strings).
+ */
+export function redirects(ws: string[]): { plain: string[]; inputs: string[]; outputs: string[] } {
+  const plain: string[] = [];
+  const inputs: string[] = [];
+  const outputs: string[] = [];
+  for (let i = 0; i < ws.length; i++) {
+    const m = ws[i].match(REDIRECT_WORD);
+    if (!m) {
+      plain.push(ws[i]);
+      continue;
+    }
+    const [, fd, op] = m;
+    let target = m[3];
+    if (!target && i + 1 < ws.length) target = ws[++i];
+    if (!target) continue;
+    if (op === "<" || op === "<<<") {
+      if (fd === "" || fd === "0") inputs.push(target);
+    } else if ((fd === "" || fd === "1" || fd === "&") && !target.startsWith("&")) {
+      outputs.push(target);
+    }
+  }
+  return { plain, inputs, outputs };
+}
+
+/** `./out.txt` and `out.txt` name the same file. */
+export function samePath(p: string): string {
+  return p.replace(/^(\.\/)+/, "");
+}
+
+/** Record the files that `ws` redirects stdout into, as saved output of `from`. */
+function captureFiles(st: FlowState, ws: string[], from: Invocation[]): void {
+  for (const target of redirects(ws).outputs) {
+    if (target.startsWith("/dev/")) continue;
+    st.captures.push({ kind: "file", name: samePath(target), from, seq: st.order.size });
+  }
 }
 
 /** `pipelines()`, plus `top`: the invocations whose stdout is the command's own stdout. */
-function walk(cmd: string, depth: number): { out: Invocation[][]; top: Invocation[] } {
+function walk(cmd: string, depth: number, st: FlowState): { out: Invocation[][]; top: Invocation[] } {
   const out: Invocation[][] = [];
   // open pipeline per context: segments of one context arrive in order, inner contexts interleave
   const open = new Map<number, Invocation[]>();
@@ -451,6 +542,8 @@ function walk(cmd: string, depth: number): { out: Invocation[][]; top: Invocatio
         for (const inv of unit) if (!line.includes(inv)) line.push(inv);
         open.set(seg.ctx, line);
       } else open.delete(seg.ctx);
+      // `{ a; } > f`, `(a) > f`, `done > f`: everything the group printed lands in f
+      if (unit.length) captureFiles(st, CLOSERS.has(ws[0] ?? "") ? ws.slice(1) : ws, [...(feed ?? []), ...unit]);
       continue;
     }
 
@@ -463,20 +556,30 @@ function walk(cmd: string, depth: number): { out: Invocation[][]; top: Invocatio
       }
     }
     const inv = header ? null : resolve(ws);
+    // `out=$(a)` / `local out=$(a)`: out holds what ran in the `$(...)`
+    const saved = (seg.subs ?? []).flatMap((id) => members.get(id) ?? []);
+    const assigns = header ? [] : !inv ? ws : DECLARERS.has(inv.program) ? inv.args : [];
+    for (const w of saved.length ? assigns : []) {
+      const m = w.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s);
+      // the `$(...)` placeholder `_` sits in the value; `a=1 out=$(x)` only marks out
+      if (m && m[2].includes("_")) st.captures.push({ kind: "var", name: m[1], from: saved, seq: st.order.size });
+    }
     if (!inv) {
       open.delete(seg.ctx);
       continue;
     }
     mine.push(inv);
+    st.order.set(inv, st.order.size);
     const piped = open.get(seg.ctx);
     const line = piped ?? [];
     if (!piped) out.push(line);
     line.push(inv);
     if (seg.pipe) open.set(seg.ctx, line);
     else open.delete(seg.ctx);
+    captureFiles(st, inv.args, [...line]);
     const script = depth < 4 ? shellScript(inv) : null;
     if (script) {
-      const inner = walk(script, depth + 1);
+      const inner = walk(script, depth + 1, st);
       // a pipe into the wrapper feeds the script's first top-level pipeline: `gh-axi ... | bash -c 'head'`
       const first = piped ? inner.out.find((l) => l.some((x) => inner.top.includes(x))) : undefined;
       if (first) line.push(...first);

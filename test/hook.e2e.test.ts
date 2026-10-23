@@ -56,6 +56,12 @@ describe.each([
     expect(denied(r.out)).toBe(true);
     expect(r.out).toContain("AXI_TRUNCATE=1");
   });
+  it("denies axi output saved to a variable, then truncated (#16)", () => {
+    const r = run(agent, shape('out=$(gh-axi pr list); echo "$out" | head'));
+    expect(r.code).toBe(0);
+    expect(denied(r.out)).toBe(true);
+    expect(r.out).toContain("AXI_TRUNCATE=1");
+  });
   it("allows the axi", () => {
     const r = run(agent, shape("railway-axi status"));
     expect(r.code).toBe(0);

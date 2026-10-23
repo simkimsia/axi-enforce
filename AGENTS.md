@@ -16,7 +16,8 @@ instead of the plain CLIs they wrap, with an issue-backed escape hatch for gaps.
   `tool`). `owners` decides which axis need `AXI_GAP=` (issue) vs `AXI_BYPASS=1`.
 - `src/decide.ts`: pure decision function; all I/O comes through `Deps`, so it is tested
   without PATH, network or disk. Two checks: plain CLI → its axi (per rule), and truncated
-  axi output (`<axi> | head|tail|cut`, via `pipelines()` in `parse.ts`; escape `AXI_TRUNCATE=1`).
+  axi output (`<axi> | head|tail|cut`, and output saved to a variable or file earlier in the
+  same command line, via `flow()` in `parse.ts`; escape `AXI_TRUNCATE=1`).
 - `src/deps.ts`: the real I/O: PATH lookup (PATHEXT on Windows), `gh api` issue
   state, gap log. The hook runs outside the agent, so calling plain `gh` here is fine.
 - `src/adapters/`: one file per hook protocol: pull the command out of the payload,
