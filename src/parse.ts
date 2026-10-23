@@ -513,6 +513,7 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
   const bindings = new Map<number, Map<string, string[]>>([[0, new Map(outer)]]);
   // what a child shell sees: its caller's environment, so only exported variables (#26)
   const exports = new Map<number, Set<string>>([[0, new Set(outer?.keys())]]);
+  const unsets = new Map<number, Set<string>>([[0, new Set()]]);
   const context = (id: number): Map<string, string[]> => {
     let vars = bindings.get(id);
     if (!vars) {
@@ -520,11 +521,11 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
       vars = new Map(context(parent));
       bindings.set(id, vars);
       exports.set(id, new Set(exports.get(parent)));
+      unsets.set(id, new Set(unsets.get(parent)));
     }
     return vars;
   };
   const deferred = DEFERRED.some((re) => re.test(cmd));
-  const dropped = new Set<string>();
   const lookedIn = (ids: number[]) => ids.flatMap((id) => found.get(id) ?? []);
   const record = (bindings: Map<string, string[]>, name: string, looked: string[]) => {
     if (looked.length) bindings.set(name, looked);
@@ -533,6 +534,7 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
   for (const seg of segments) {
     const vars = context(seg.ctx);
     const exported = exports.get(seg.ctx)!;
+    const dropped = unsets.get(seg.ctx)!;
     if (!seg.text) continue;
     const lx = lex(seg.text);
     const ws = lx.words;
@@ -573,7 +575,7 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
       for (const arg of inv.args) {
         if (arg.startsWith("-")) continue;
         exported.delete(arg);
-        dropped.add(arg);
+        if (!deferred) dropped.add(arg);
       }
     }
     // `W=... sh -c '...'`: a prefix assignment is in that command's environment
