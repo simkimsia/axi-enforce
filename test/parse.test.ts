@@ -98,6 +98,10 @@ describe("invocations: catches the CLI wherever it executes", () => {
       "export W=$(command -v gh); (W=printf); bash -c '$W pr list'",
       ["export", "command", "bash", "$W", "gh"],
     ],
+    ...["cleanup() { unset W; }", '[ -n "$X" ] && unset W'].map((unset) => [
+      `W=$(command -v gh); ${unset}; $W pr list`,
+      ["command", ...(unset.includes("cleanup") ? ["cleanup", "}"] : ["["]), "unset", "$W", "gh"],
+    ]),
     ["local W=$(command -v wrangler); $W deploy", ["local", "command", "$W", "wrangler"]],
     ["export W=$(command -v wrangler); $W deploy", ["export", "command", "$W", "wrangler"]],
     ["declare -x W=$(command -v wrangler); $W deploy", ["declare", "command", "$W", "wrangler"]],

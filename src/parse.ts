@@ -569,11 +569,7 @@ export function invocations(cmd: string, depth = 0, outer?: Map<string, string[]
       }
     }
     if (inv?.program === "unset" && !inv.args.some((arg) => /^-[A-Za-z]*f/.test(arg))) {
-      for (const arg of inv.args) {
-        if (arg.startsWith("-")) continue;
-        vars.delete(arg);
-        exported.delete(arg);
-      }
+      for (const arg of inv.args) if (!arg.startsWith("-")) exported.delete(arg);
     }
     // `W=... sh -c '...'`: a prefix assignment is in that command's environment
     const prefixed = new Set<string>();
