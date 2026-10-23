@@ -50,7 +50,7 @@ function feeds(inv: Invocation, words: Redirects, c: Capture, ref: RegExp | unde
 
 type Redirects = ReturnType<typeof redirects>;
 
-/** `grep -c x f`, `wc -l`: prints a count or file names, not the saved output (#22). */
+/** `grep -c x f`, `wc -l`: prints a count, not the saved output (#22). */
 function summarizes(inv: Invocation): boolean {
   if (inv.program === "wc") return true;
   if (inv.program !== "grep") return false;
@@ -63,7 +63,7 @@ function summarizes(inv: Invocation): boolean {
       continue;
     }
     if (a.startsWith("--")) {
-      if (/^--(count|files-with(out)?-matches|quiet|silent)$/.test(a)) return true;
+      if (a === "--count") return true;
       continue;
     }
     if (!a.startsWith("-")) continue;
@@ -72,7 +72,7 @@ function summarizes(inv: Invocation): boolean {
         if (j === a.length - 1) i++;
         break;
       }
-      if ("clLq".includes(a[j])) return true;
+      if (a[j] === "c") return true;
     }
   }
   return false;
