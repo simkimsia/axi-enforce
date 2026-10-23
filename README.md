@@ -52,18 +52,18 @@ axi-enforce:         deny: Don't pipe gh-axi through tail: axi output is already
                      it hides fields ... Rerun without `| tail` and read all of it, or `grep` for the field.
 ```
 
-| Situation                                                                            | What happens                                               |
-| ------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
-| `<axi> ... \| head` / `\| tail` / `\| cut`, anywhere later in the same pipeline      | Refused. Read all of it, or `grep` for the field.          |
-| `{ <axi>; } \| head`, also `( )`, loops and `if ... fi`; `<axi> \| (head)`           | Refused, same reason.                                      |
-| `bash -c "<axi>" \| head`, and `<axi> \| bash -c 'head'`                             | Refused, same reason.                                      |
-| `out=$(<axi> ...); echo "$out" \| head`, `<axi> ... > f; tail f` (same command line) | Refused, same reason.                                      |
-| `gh-axi run watch ... > f; tail f`                                                   | Allowed: that is tailing a CI log.                         |
-| `<axi> ... \| grep x`, or output saved and read whole (`> f; cat f`)                 | Allowed.                                                   |
-| Saved output only counted (`grep -c x f \| head`, `wc -l`) | Allowed: the truncator receives counts. |
-| `<axi> ... > f; git log > f; head f` | Allowed: the later unconditional stdout writer replaces the saved output. |
-| Deliberately wanting part of a long output (e.g. CI logs)                            | Prefix `AXI_TRUNCATE=1`. Allowed and logged as `truncate`. |
-| You don't want this check                                                            | `"truncation": false` in `policy.json`.                    |
+| Situation                                                                            | What happens                                                              |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| `<axi> ... \| head` / `\| tail` / `\| cut`, anywhere later in the same pipeline      | Refused. Read all of it, or `grep` for the field.                         |
+| `{ <axi>; } \| head`, also `( )`, loops and `if ... fi`; `<axi> \| (head)`           | Refused, same reason.                                                     |
+| `bash -c "<axi>" \| head`, and `<axi> \| bash -c 'head'`                             | Refused, same reason.                                                     |
+| `out=$(<axi> ...); echo "$out" \| head`, `<axi> ... > f; tail f` (same command line) | Refused, same reason.                                                     |
+| `gh-axi run watch ... > f; tail f`                                                   | Allowed: that is tailing a CI log.                                        |
+| `<axi> ... \| grep x`, or output saved and read whole (`> f; cat f`)                 | Allowed.                                                                  |
+| Saved output only counted (`grep -c x f \| head`, `wc -l`)                           | Allowed: the truncator receives counts.                                   |
+| `<axi> ... > f; git log > f; head f`                                                 | Allowed: the later unconditional stdout writer replaces the saved output. |
+| Deliberately wanting part of a long output (e.g. CI logs)                            | Prefix `AXI_TRUNCATE=1`. Allowed and logged as `truncate`.                |
+| You don't want this check                                                            | `"truncation": false` in `policy.json`.                                   |
 
 An axi is any program named in a rule's `axi`, or any program whose name ends in `-axi`.
 

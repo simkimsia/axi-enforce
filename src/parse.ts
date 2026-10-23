@@ -696,7 +696,12 @@ function captureFiles(
 }
 
 /** `pipelines()`, plus `top`: the invocations whose stdout is the command's own stdout. */
-function walk(cmd: string, depth: number, st: FlowState, conditional = false): { out: Invocation[][]; top: Invocation[] } {
+function walk(
+  cmd: string,
+  depth: number,
+  st: FlowState,
+  conditional = false,
+): { out: Invocation[][]; top: Invocation[] } {
   const out: Invocation[][] = [];
   // open pipeline per context: segments of one context arrive in order, inner contexts interleave
   const open = new Map<number, Invocation[]>();

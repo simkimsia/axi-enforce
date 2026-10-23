@@ -83,8 +83,8 @@ describe("invocations: catches the CLI wherever it executes", () => {
     ['W=printf; W=$(command -v gh) sh -c "$W hello"', ["command", "sh", "_"]],
     ['W=$(command -v gh); W=printf sh -c "$W pr list"', ["command", "sh", "gh"]],
     ['W=$(command -v gh); W=printf sh -c "${W} pr list"', ["command", "sh", "gh"]],
-    ["W=$(command -v gh); W=printf sh -c \"\\$W hello\"", ["command", "sh", "$W"]],
-    ["W=printf; W=$(command -v gh) sh -c \"\\$W pr list\"", ["command", "sh", "$W", "gh"]],
+    ['W=$(command -v gh); W=printf sh -c "\\$W hello"', ["command", "sh", "$W"]],
+    ['W=printf; W=$(command -v gh) sh -c "\\$W pr list"', ["command", "sh", "$W", "gh"]],
     ["W=$(command -v gh); W=printf sh -c \"echo $W; \"'$W hello'", ["command", "sh", "echo", "$W"]],
     ["W=$(command -v wrangler 2>/dev/null); $W deploy", ["command", "$W", "wrangler"]],
   ])("%s", (cmd, want) => {
